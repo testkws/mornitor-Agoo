@@ -13,12 +13,17 @@ continues running on Ubuntu; the ingestion Edge Function stays on Supabase.
    - `SUPABASE_PUBLISHABLE_KEY`: your public Supabase publishable key or legacy anon key.
 4. Deploy. The included `vercel.json` selects Other, runs `node build.mjs`, and
    serves `dist`. No npm dependencies or manual `config.js` are needed.
-5. Open the deployment URL and sign in with your approved Supabase Auth account.
+5. Open the deployment URL. No sign-in is required.
 
-The database migration, approved-user entry in `monitoring_access`, and worker
-setup must already be configured. Disable public signup in Supabase Auth. Set
-its Site URL to your production dashboard URL and configure redirect URLs if
-using account recovery or other email authentication flows.
+The dashboard is read-only and public. Apply both migrations in
+`../supabase/migrations/` (`0002_public_read_monitoring.sql` grants the `anon`
+role SELECT on the five monitoring tables and the two read RPCs; its revert
+statements are in a comment at the bottom). Worker setup must already be
+configured. Anyone with the URL can read worker IDs, place evidence, and logs,
+so keep sensitive data out of event payloads. Worker credentials and ingestion
+stay closed to `anon`.
+
+The UI follows the system light/dark preference and has a manual theme toggle.
 
 Both environment values become public browser configuration. Never supply a
 worker token, Supabase secret key, or service-role key. The build rejects secret

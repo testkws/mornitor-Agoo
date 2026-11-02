@@ -3,8 +3,6 @@
 
   const PAGE_SIZE = 50;
   const config = window.GOOGLE_MONITORING_CONFIG || {};
-  const loginView = document.getElementById("login-view");
-  const appView = document.getElementById("app-view");
   const globalError = document.getElementById("global-error");
   let client = null;
   let workers = [];
@@ -38,6 +36,24 @@
 
   function setError(message = "") {
     globalError.textContent = message;
+    setLive(message ? "bad" : "ok", message ? "Update failed" : `Updated ${new Date().toLocaleTimeString()}`);
+  }
+
+  function setLive(state, text) {
+    const live = document.getElementById("live-status");
+    live.className = `live ${state}`;
+    document.getElementById("live-text").textContent = text;
+  }
+
+  const PILL_TONES = {
+    found: "ok", checked: "ok", info: "info", running: "info", pending: "neutral", debug: "neutral", skipped: "neutral",
+    found_no_phone: "warn", ambiguous: "warn", retry_wait: "warn", warning: "warn",
+    not_found: "bad", exhausted: "bad", blocked: "bad", failed: "bad", error: "bad",
+  };
+
+  function pill(value, label = value) {
+    if (value == null || value === "" || value === "—") return "—";
+    return { node: el("span", `pill ${PILL_TONES[value] || "neutral"}`, label) };
   }
 
   function resultOrThrow(result) {
@@ -167,7 +183,7 @@
         metricCard("Last upload", formatDate(worker.last_upload_at), `Last seen ${formatDate(worker.last_seen_at)}`),
       );
       section.append(cards);
-      const detail = el("div", "muted", `Queue: ${queueLine} · Last reported exit: ${exit}`);
+      const detail = el("div", "meta muted", `Queue: ${queueLine} · Last reported exit: ${exit}`);
       if (state.pause_reason) detail.append(el("span", "badge error", `Paused: ${state.pause_reason}`));
       section.append(detail);
       container.append(section);
@@ -198,7 +214,7 @@
       const button = el("button", "link", name);
       button.type = "button";
       button.addEventListener("click", () => openDetail(place).catch((error) => setError(error?.message || "Unable to load place details.")));
-      return [button, place.worker_id.slice(0, 8), place.osm_id, place.outcome || "—", place.queue_status || "—", place.review_flag ? "Yes" : "No", place.latest_error_code || "—"];
+      return [button, place.worker_id.slice(0, 8), place.osm_id, pill(place.outcome), pill(place.queue_status), place.review_flag ? pill("warning", "needs review") : "—", place.latest_error_code || "—"];
     });
     document.getElementById("places-table").replaceChildren(makeTable(
       ["Name", "Worker", "OSM ID", "Outcome", "Queue", "Review", "Latest error"], rows,
@@ -253,7 +269,7 @@
     const attempts = resultOrThrow(result) || [];
     attemptsTotal = Number(result.count || 0);
     const rows = attempts.map((attempt) => [
-      formatDate(attempt.worker_completed_at), attempt.status, attempt.outcome || "—",
+      formatDate(attempt.worker_completed_at), pill(attempt.status), pill(attempt.outcome),
       attempt.matching_method || "—", attempt.error_code || attempt.error_message || "—",
       { node: makeDisclosure(attempt), className: "wrap" },
     ]);
@@ -298,7 +314,7 @@
     const events = resultOrThrow(result) || [];
     logsTotal = Number(result.count || 0);
     const rows = events.map((event) => [
-      formatDate(event.received_at), event.severity, event.event_type,
+      formatDate(event.received_at), pill(event.severity), event.event_type,
       event.worker_id.slice(0, 8), event.run_id || "—",
       { node: jsonDisclosure(event.data), className: "wrap" },
     ]);
@@ -320,8 +336,7 @@
   }
 
   async function refreshCurrent() {
-    if (document.hidden || !client || appView.hidden) return;
-    setError("");
+    if (document.hidden || !client) return;
     try {
       if (activeView === "overview") await renderOverview();
       else if (activeView === "places") {
@@ -334,6 +349,7 @@
         }
       }
       else await renderLogs();
+      setError("");
     } catch (error) {
       setError(error?.message || "Unable to load monitoring data.");
     }
@@ -348,25 +364,18 @@
     populateWorkers();
   }
 
-  function showApp(user) {
-    loginView.hidden = true;
-    appView.hidden = false;
-    document.getElementById("account-email").textContent = user?.email || "Signed in";
-    refreshWorkers().then(refreshCurrent).catch((error) => setError(error?.message || "Unable to load workers."));
-    startPolling();
+  function refreshAll() {
+    return refreshWorkers().then(refreshCurrent).catch((error) => setError(error?.message || "Unable to refresh data."));
   }
 
-  function showLogin() {
-    appView.hidden = true;
-    loginView.hidden = false;
-    stopPolling();
+  function startApp() {
+    refreshAll();
+    startPolling();
   }
 
   function startPolling() {
     stopPolling();
-    if (!document.hidden) pollTimer = window.setInterval(() => {
-      refreshWorkers().then(refreshCurrent).catch((error) => setError(error?.message || "Unable to refresh data."));
-    }, 30_000);
+    if (!document.hidden) pollTimer = window.setInterval(refreshAll, 30_000);
   }
 
   function stopPolling() {
@@ -381,29 +390,18 @@
     refreshCurrent();
   }
 
-  document.getElementById("login-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const errorNode = document.getElementById("login-error");
-    errorNode.textContent = "";
-    const submit = event.currentTarget.querySelector("button[type=submit]");
-    submit.disabled = true;
-    try {
-      const result = await client.auth.signInWithPassword({
-        email: document.getElementById("email").value,
-        password: document.getElementById("password").value,
-      });
-      if (result.error) throw result.error;
-      showApp(result.data.user);
-    } catch (error) {
-      errorNode.textContent = error?.message || "Sign-in failed.";
-    } finally {
-      submit.disabled = false;
-    }
+  document.getElementById("refresh").addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    button.classList.remove("spin");
+    void button.offsetWidth;
+    button.classList.add("spin");
+    refreshAll();
   });
-
-  document.getElementById("sign-out").addEventListener("click", async () => {
-    await client.auth.signOut();
-    showLogin();
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("theme", root.dataset.theme); } catch { /* storage unavailable */ }
   });
   document.getElementById("active-worker").addEventListener("change", (event) => {
     activeWorker = event.target.value;
@@ -430,29 +428,23 @@
   document.getElementById("log-search").addEventListener("click", () => { logsOffset = 0; refreshCurrent(); });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopPolling();
-    else if (!appView.hidden) {
-      refreshWorkers().then(refreshCurrent).catch((error) => setError(error?.message || "Unable to refresh data."));
+    else if (client) {
+      refreshAll();
       startPolling();
     }
   });
 
   if (!window.supabase?.createClient) {
-    document.getElementById("login-error").textContent = "Supabase browser library did not load.";
+    setError("Supabase browser library did not load.");
     return;
   }
   if (!config.supabaseUrl || !config.supabasePublishableKey) {
-    document.getElementById("login-error").textContent = "Copy config.example.js to config.js and add the Supabase URL and publishable key.";
+    setError("Copy config.example.js to config.js and add the Supabase URL and publishable key.");
     return;
   }
+  // Read-only public access: the anon role is limited to SELECT by migration 0002.
   client = window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
-  client.auth.getSession().then(({ data, error }) => {
-    if (error) setError(error.message);
-    if (data?.session?.user) showApp(data.session.user);
-  });
-  client.auth.onAuthStateChange((_event, session) => {
-    if (session?.user) showApp(session.user);
-    else showLogin();
-  });
+  startApp();
 })();
