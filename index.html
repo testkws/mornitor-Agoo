@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Google scraper monitoring</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="login-view" class="login-shell">
+    <form id="login-form" class="login-card">
+      <p class="eyebrow">Private worker dashboard</p>
+      <h1>Google scraper</h1>
+      <p class="muted">Sign in with the approved monitoring account.</p>
+      <label>Email<input id="email" type="email" autocomplete="username" required></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error-message" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="app-view" class="app-shell" hidden>
+    <header class="topbar">
+      <div><span class="eyebrow">Private monitoring</span><h1>Google scraper</h1></div>
+      <div class="account-actions"><label class="worker-picker">Worker<select id="active-worker"></select></label><span id="account-email" class="muted"></span><button id="sign-out" class="secondary">Sign out</button></div>
+    </header>
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab active" data-view="overview">Overview</button>
+      <button class="tab" data-view="places">Places</button>
+      <button class="tab" data-view="logs">Logs</button>
+    </nav>
+    <p id="global-error" class="error-message" role="alert"></p>
+    <section id="overview-view" class="view"></section>
+    <section id="places-view" class="view" hidden>
+      <div class="section-heading"><div><h2>Places</h2><p class="muted">Collected evidence by OSM place.</p></div></div>
+      <div class="filters">
+        <label>Search<input id="place-query" type="search" placeholder="Name or OSM ID"></label>
+        <label>Outcome<select id="place-outcome"><option value="">All outcomes</option><option>found</option><option>found_no_phone</option><option>not_found</option><option>ambiguous</option></select></label>
+        <label>Queue status<select id="place-status"><option value="">All statuses</option><option>pending</option><option>running</option><option>retry_wait</option><option>checked</option><option>exhausted</option><option>skipped</option><option>blocked</option><option>failed</option></select></label>
+        <label>Review<select id="place-review"><option value="">All</option><option value="true">Needs review</option><option value="false">No review flag</option></select></label>
+        <button id="place-search">Apply</button>
+      </div>
+      <div id="places-table"></div>
+      <div class="pager"><button id="places-prev" class="secondary">Previous</button><span id="places-page"></span><button id="places-next" class="secondary">Next</button></div>
+    </section>
+    <section id="logs-view" class="view" hidden>
+      <div class="section-heading"><div><h2>Operational logs</h2><p class="muted">Worker events with server receipt times.</p></div></div>
+      <div class="filters">
+        <label>Worker<select id="log-worker"></select></label>
+        <label>Severity<select id="log-severity"><option value="">All severities</option><option>debug</option><option>info</option><option>warning</option><option>error</option></select></label>
+        <label>From<input id="log-from" type="datetime-local"></label>
+        <label>To<input id="log-to" type="datetime-local"></label>
+        <button id="log-search">Apply</button>
+      </div>
+      <div id="logs-table"></div>
+      <div class="pager"><button id="logs-prev" class="secondary">Previous</button><span id="logs-page"></span><button id="logs-next" class="secondary">Next</button></div>
+    </section>
+  </div>
+
+  <dialog id="place-dialog" class="detail-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">Place evidence</p><h2 id="detail-title"></h2></div><button id="detail-close" class="secondary">Close</button></div>
+    <div id="detail-content"></div>
+    <h3>Attempt history</h3>
+    <div id="attempts-table"></div>
+    <div class="pager"><button id="attempts-prev" class="secondary">Previous</button><span id="attempts-page"></span><button id="attempts-next" class="secondary">Next</button></div>
+  </dialog>
+</body>
+</html>
