@@ -5,3 +5,8 @@ dist/
 
 
 .env
+.vercel
+.env*
+
+__pycache__/
+*.py[cod]
