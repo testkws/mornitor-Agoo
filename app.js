@@ -649,7 +649,7 @@
   const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
   function isDarkTheme() {
     const selected = document.documentElement.dataset.theme;
-    return selected ? selected === "dark" : systemTheme.matches;
+    return selected === "dark" || (selected !== "light" && systemTheme.matches);
   }
   function updateThemeToggle() {
     const dark = isDarkTheme();

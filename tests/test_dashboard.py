@@ -351,6 +351,23 @@ def test_manual_theme_choice_survives_reload(browser):
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to light theme")
     expect(page.locator("#theme-icon-sun")).to_be_visible()
     assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+    page.emulate_media(color_scheme="dark")
+    page.locator("#theme-toggle").click()
+    assert page.evaluate("localStorage.getItem('theme')") == "light"
+    page.reload()
+    expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to dark theme")
+    expect(page.locator("#theme-icon-moon")).to_be_visible()
+    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 227)")
+    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(133, 133, 133)")
+    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+
+    page.evaluate("localStorage.setItem('theme', 'system')")
+    page.reload()
+    expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to light theme")
+    page.locator("#theme-toggle").click()
+    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 227)")
+    assert page.evaluate("localStorage.getItem('theme')") == "light"
     page.close()
 
 
@@ -371,7 +388,7 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
           const styles = getComputedStyle(document.documentElement);
           return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
             '--ok', '--ok-soft', '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft',
-            '--brand-slate', '--accent-ink', '--action', '--action-hover']
+            '--brand-slate', '--control-line', '--accent-ink', '--action', '--action-hover']
             .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
         }""")
         for foreground, background in pairs:
@@ -380,6 +397,10 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
         for background in ("--bg", "--surface-2"):
             low, high = sorted((luminance(colors["--brand-slate"]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--brand-slate", background)
+        if theme == "light":
+            for background in ("--bg", "--surface", "--surface-2", "--accent-soft"):
+                low, high = sorted((luminance(colors["--control-line"]), luminance(colors[background])))
+                assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--control-line", background)
 
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     rendered = page.evaluate("""() => ({
@@ -401,6 +422,8 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
         "navigation": "rgb(109, 129, 150)",
     }
     show(page, "places")
+    for selector in ("#active-worker", "#refresh", "#theme-toggle", "#place-query", "#place-outcome", "#places-next"):
+        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(133, 133, 133)")
     page.locator("#place-search").hover()
     expect(page.locator("#place-search")).to_have_css("background-color", "rgb(52, 52, 52)")
     expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")

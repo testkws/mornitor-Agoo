@@ -9,6 +9,7 @@
   --ink: #282d31;
   --muted: #59636a;
   --line: var(--brand-gray);
+  --control-line: #858585;
   --accent: #42586c;
   --accent-ink: #ffffff;
   --action: var(--brand-charcoal);
@@ -35,6 +36,7 @@
   --ink: #f2f1df;
   --muted: #bfc4c6;
   --line: #586168;
+  --control-line: var(--line);
   --accent: #b5c6d6;
   --accent-soft: #303b45;
   --focus: #b5c6d6;
@@ -57,6 +59,7 @@
     --ink: #f2f1df;
     --muted: #bfc4c6;
     --line: #586168;
+    --control-line: var(--line);
     --accent: #b5c6d6;
     --accent-soft: #303b45;
     --focus: #b5c6d6;
@@ -97,7 +100,7 @@ button {
 button:hover { background: var(--action-hover); }
 button:active { transform: translateY(1px); }
 button:disabled { opacity: .45; cursor: not-allowed; filter: none; transform: none; }
-button.secondary { color: var(--ink); background: var(--surface); border-color: var(--line); }
+button.secondary { color: var(--ink); background: var(--surface); border-color: var(--control-line); }
 button.secondary:hover { filter: none; background: var(--surface-2); }
 .icon-btn {
   flex: 0 0 44px;
@@ -108,7 +111,7 @@ button.secondary:hover { filter: none; background: var(--surface-2); }
   place-items: center;
   color: var(--ink);
   background: var(--surface);
-  border-color: var(--line);
+  border-color: var(--control-line);
   font-size: 1.25rem;
   transition: filter .15s, transform .1s;
 }
@@ -121,7 +124,7 @@ input, select {
   width: 100%;
   min-width: 0;
   min-height: 44px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 9px;
   background: var(--surface);
   color: var(--ink);
