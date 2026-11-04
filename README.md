@@ -54,6 +54,11 @@ monitoring tables per refresh. The queries return counts rather than attempt
 records, but database work grows with attempt history and viewer traffic. Counts
 are separate reads, so rates can briefly differ while new uploads arrive.
 
+The activity charts use the same counts and selected worker as the overview.
+Attempt results compare matched and other completed attempts in the last 24
+hours; the queue chart compares pending, scheduled, and running counts from the
+latest snapshots. The charts do not issue additional queries.
+
 Both environment values become public browser configuration. Never supply a
 worker token, Supabase secret key, or service-role key. The build rejects secret
 and service-role keys. Database RLS controls access to the monitoring data.

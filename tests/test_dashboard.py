@@ -118,16 +118,33 @@ def test_summary_metrics_use_attempts_in_window_and_selected_worker(page):
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
     expect(page.get_by_text("Last reported paused: BLOCKED")).to_be_visible()
     expect(page.get_by_text("Worker not reporting")).to_be_visible()
+    attempts_chart = page.get_by_role("region", name="Attempt results")
+    queue_chart = page.get_by_role("region", name="Queue snapshot")
+    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("4 · 44.4%")
+    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("5 · 55.6%")
+    share = attempts_chart.locator(".chart-donut").evaluate("node => parseFloat(node.style.getPropertyValue('--matched-share'))")
+    assert share == pytest.approx(4 * 100 / 9)
+    for status, count, width in (("pending", "20", "100%"), ("scheduled", "10", "50%"), ("running", "2", "10%")):
+        row = queue_chart.locator(f'[data-status="{status}"]')
+        expect(row.locator("strong")).to_have_text(count)
+        assert row.locator(".chart-bar-fill").evaluate("node => node.style.width") == width
 
     page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerA"))
     expect(metric(page, "success").locator(".summary-value")).to_have_text("37.5%")
     expect(metric(page, "retry").locator(".summary-value")).to_have_text("12.5%")
     expect(metric(page, "success")).to_contain_text("3 of 8 attempts")
+    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("3 · 37.5%")
+    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("5 · 62.5%")
     page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
     expect(metric(page, "success").locator(".summary-value")).to_have_text("100.0%")
     expect(metric(page, "retry").locator(".summary-value")).to_have_text("0.0%")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("0")
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("0")
+    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("1 · 100.0%")
+    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("0 · 0.0%")
+    for row in queue_chart.locator(".chart-bar-item").all():
+        expect(row.locator("strong")).to_have_text("0")
+        assert row.locator(".chart-bar-fill").evaluate("node => node.style.width") == "0%"
 
 
 def test_empty_summary_and_no_workers(page):
@@ -142,6 +159,7 @@ def test_empty_summary_and_no_workers(page):
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("0")
     expect(metric(page, "workers")).to_contain_text("No workers provisioned")
     expect(page.get_by_text("No scraper worker is provisioned yet.")).to_be_visible()
+    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("No completed attempts in the last 24 hours.")
 
 
 def test_resume_state_does_not_present_historical_pause_as_current(page):
@@ -222,8 +240,11 @@ def test_failed_metric_does_not_hide_queue_and_worker_status(page):
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
     expect(page.locator("#global-error")).to_contain_text("Some performance metrics are unavailable")
     expect(page.locator("#live-text")).to_have_text("Partial update")
+    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
+    expect(page.get_by_role("region", name="Queue snapshot").locator('[data-status="pending"] strong')).to_have_text("20")
     page.locator("#refresh").click()
     expect(metric(page, "success").locator(".summary-value")).to_have_text("100.0%")
+    expect(page.get_by_role("region", name="Attempt results").locator('[data-result="matched"]')).to_contain_text("101 · 100.0%")
     expect(page.locator("#global-error")).to_be_empty()
 
 
@@ -239,6 +260,7 @@ def test_individual_metric_failure_is_not_reported_as_zero(page, failed_kind):
         expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
         expect(metric(page, "retry").locator(".summary-value")).to_have_text("—")
         expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
+        expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
     elif failed_kind == "metric-consent":
         expect(metric(page, "blocked")).to_contain_text("Consent count unavailable")
         expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
@@ -258,6 +280,7 @@ def test_inconsistent_counts_do_not_show_impossible_rates(page):
     finish(page, request_id)
     expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
     expect(page.locator("#global-error")).to_contain_text("Some performance metrics are unavailable")
+    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
 
 
 def test_old_overview_metrics_cannot_replace_new_worker_selection(page):
@@ -270,10 +293,12 @@ def test_old_overview_metrics_cannot_replace_new_worker_selection(page):
     finish(page, old_request)
     expect(metric(page, "success")).to_contain_text("No completed attempts")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("0 / 1")
+    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("No completed attempts")
     expect(page.locator("#global-error")).to_be_empty()
 
 
 def test_summary_uses_head_counts_without_page_limit(page):
+    initial_queries = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).length")
     page.evaluate("""() => {
       const state = window.monitoringTest.state;
       state.attempts = Array.from({length: 1250}, (_, index) => ({
@@ -283,7 +308,7 @@ def test_summary_uses_head_counts_without_page_limit(page):
     }""")
     page.locator("#refresh").click()
     expect(metric(page, "success")).to_contain_text("1,250 of 1,250 attempts")
-    requests = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).slice(-5)")
+    requests = page.evaluate("start => window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).slice(start)", initial_queries)
     assert len(requests) == 5
     assert all(request["params"]["head"] for request in requests)
     assert requests[-1]["kind"] == "metric-total"

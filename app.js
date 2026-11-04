@@ -221,6 +221,84 @@
     return card;
   }
 
+  function attemptChart(attempts) {
+    const section = el("section", "chart-panel");
+    section.dataset.chart = "attempts";
+    const title = el("h3", "chart-title", "Attempt results");
+    title.id = "attempt-chart-title";
+    section.setAttribute("aria-labelledby", title.id);
+    section.append(title, el("p", "chart-description", "Completed attempts · last 24 hours"));
+
+    if (attempts.matched === null || attempts.total === null) {
+      section.append(el("p", "chart-empty", "Attempt counts are unavailable. Retrying automatically."));
+      return section;
+    }
+    if (!attempts.total) {
+      section.append(el("p", "chart-empty", "No completed attempts in the last 24 hours."));
+      return section;
+    }
+
+    const matched = attempts.matched;
+    const other = attempts.total - matched;
+    const layout = el("div", "chart-donut-layout");
+    const donut = el("div", "chart-donut");
+    donut.style.setProperty("--matched-share", `${matched * 100 / attempts.total}%`);
+    const center = el("div", "chart-donut-center");
+    center.append(el("strong", "", formatCount(attempts.total)), el("span", "", "completed"));
+    donut.append(center);
+
+    const legend = el("ul", "chart-legend");
+    [
+      { key: "matched", label: "Matched", count: matched },
+      { key: "other", label: "Other results", count: other },
+    ].forEach(({ key, label, count }) => {
+      const item = el("li", "chart-legend-item");
+      item.dataset.result = key;
+      const marker = el("span", `chart-legend-marker ${key}`);
+      marker.setAttribute("aria-hidden", "true");
+      const text = el("div", "chart-legend-text");
+      text.append(el("span", "chart-legend-label", label),
+        el("span", "chart-legend-value", `${formatCount(count)} · ${(count * 100 / attempts.total).toFixed(1)}%`));
+      item.append(marker, text);
+      legend.append(item);
+    });
+    layout.append(donut, legend);
+    section.append(layout, el("p", "chart-note", "Matches include results with or without a phone number."));
+    return section;
+  }
+
+  function queueChart(pending, scheduled, running) {
+    const section = el("section", "chart-panel");
+    section.dataset.chart = "queue";
+    const title = el("h3", "chart-title", "Queue snapshot");
+    title.id = "queue-chart-title";
+    section.setAttribute("aria-labelledby", title.id);
+    section.append(title, el("p", "chart-description", "Latest uploaded counts · scaled to the largest group"));
+
+    const rows = [
+      { key: "pending", label: "Pending", count: pending },
+      { key: "scheduled", label: "Scheduled", count: scheduled },
+      { key: "running", label: "Running", count: running },
+    ];
+    const maximum = Math.max(...rows.map((row) => row.count));
+    const list = el("ul", "chart-bars");
+    rows.forEach(({ key, label, count }) => {
+      const item = el("li", "chart-bar-item");
+      item.dataset.status = key;
+      const heading = el("div", "chart-bar-heading");
+      heading.append(el("span", "", label), el("strong", "", formatCount(count)));
+      const track = el("div", "chart-bar-track");
+      track.setAttribute("aria-hidden", "true");
+      const fill = el("span", "chart-bar-fill");
+      fill.style.width = `${maximum ? count * 100 / maximum : 0}%`;
+      track.append(fill);
+      item.append(heading, track);
+      list.append(item);
+    });
+    section.append(list, el("p", "chart-note", "Scheduled includes future rechecks."));
+    return section;
+  }
+
   function workerStat(label, value, detail) {
     const stat = el("div", "worker-stat");
     stat.append(el("div", "worker-stat-label", label), el("div", "worker-stat-value", value));
@@ -281,6 +359,12 @@
     );
     content.append(summary);
     content.append(el("p", "summary-note", "Performance uses completed attempts in the last 24 hours. Queue and worker status reflect the latest uploaded snapshots."));
+
+    const chartHeading = el("div", "activity-section-heading");
+    chartHeading.append(el("p", "eyebrow", "At a glance"), el("h2", "activity-section-title", "Activity breakdown"));
+    const charts = el("div", "charts-grid");
+    charts.append(attemptChart(attempts), queueChart(pending, scheduled, running));
+    content.append(chartHeading, charts);
 
     const workerHeading = el("div", "worker-section-heading");
     const workerIntro = el("div");
