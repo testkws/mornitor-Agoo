@@ -363,7 +363,7 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
     pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--surface-2"),
              ("--accent", "--bg"), ("--accent", "--surface"), ("--accent", "--accent-soft"),
              ("--ok", "--ok-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"),
-             ("--info", "--info-soft"), ("--turquoise-ink", "--brand-turquoise"),
+             ("--info", "--info-soft"),
              ("--accent-ink", "--action"), ("--accent-ink", "--action-hover")]
     for theme in ("light", "dark"):
         page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
@@ -371,12 +371,15 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
           const styles = getComputedStyle(document.documentElement);
           return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
             '--ok', '--ok-soft', '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft',
-            '--turquoise-ink', '--brand-turquoise', '--accent-ink', '--action', '--action-hover']
+            '--brand-slate', '--accent-ink', '--action', '--action-hover']
             .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
         }""")
         for foreground, background in pairs:
             low, high = sorted((luminance(colors[foreground]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 4.5, (theme, foreground, background)
+        for background in ("--bg", "--surface-2"):
+            low, high = sorted((luminance(colors["--brand-slate"]), luminance(colors[background])))
+            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--brand-slate", background)
 
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     rendered = page.evaluate("""() => ({
@@ -385,22 +388,22 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
       card: getComputedStyle(document.querySelector('.summary-card')).backgroundColor,
       cardBorder: getComputedStyle(document.querySelector('.summary-card')).borderTopColor,
       action: getComputedStyle(document.querySelector('#place-search')).backgroundColor,
-      turquoise: getComputedStyle(document.querySelector('.worker-avatar')).backgroundColor,
+      avatar: getComputedStyle(document.querySelector('.worker-avatar')).backgroundColor,
       navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
     })""")
     assert rendered == {
-        "background": "rgb(255, 249, 236)",
-        "logo": "rgb(255, 79, 129)",
+        "background": "rgb(255, 255, 227)",
+        "logo": "rgb(74, 74, 74)",
         "card": "rgb(255, 255, 255)",
-        "cardBorder": "rgb(234, 222, 215)",
-        "action": "rgb(255, 79, 129)",
-        "turquoise": "rgb(29, 233, 182)",
-        "navigation": "rgb(169, 20, 72)",
+        "cardBorder": "rgb(203, 203, 203)",
+        "action": "rgb(74, 74, 74)",
+        "avatar": "rgb(233, 238, 242)",
+        "navigation": "rgb(109, 129, 150)",
     }
     show(page, "places")
     page.locator("#place-search").hover()
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(255, 113, 153)")
-    expect(page.locator("#place-search")).to_have_css("color", "rgb(50, 19, 33)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(52, 52, 52)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")
 
     page.emulate_media(color_scheme="dark")
     page.evaluate("delete document.documentElement.dataset.theme")

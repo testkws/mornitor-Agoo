@@ -26,10 +26,11 @@ configured. Anyone with the URL can read worker IDs, place evidence, and logs,
 so keep sensitive data out of event payloads. Worker credentials and ingestion
 stay closed to `anon`.
 
-The UI uses hot pink (`#FF4F81`), bright turquoise (`#1DE9B6`), and light cream
-(`#FFF9EC`). It follows the system light/dark preference and has a manual theme
-toggle that remembers your choice. The dark palette carries the same colorful
-accents, while warning and error colors remain distinct for operational status.
+The UI uses charcoal (`#4A4A4A`), cool gray (`#CBCBCB`), soft ivory (`#FFFFE3`),
+and slate (`#6D8196`). It follows the system light/dark preference and has a
+manual theme toggle that remembers your choice. The dark palette carries the
+same understated character, while warning and error colors remain distinct for
+operational status.
 
 ## Overview metrics
 
