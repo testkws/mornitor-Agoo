@@ -59,6 +59,10 @@ Attempt results compare matched and other completed attempts in the last 24
 hours; the queue chart compares pending, scheduled, and running counts from the
 latest snapshots. The charts do not issue additional queries.
 
+Each place's attempt history shows the time from the worker starting an attempt
+to completing it, excluding queue time. Durations are unavailable when either
+timestamp is missing or invalid, or the completion time precedes the start.
+
 Both environment values become public browser configuration. Never supply a
 worker token, Supabase secret key, or service-role key. The build rejects secret
 and service-role keys. Database RLS controls access to the monitoring data.

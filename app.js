@@ -35,6 +35,18 @@
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
   }
 
+  function formatDuration(startedAt, completedAt) {
+    if (!startedAt || !completedAt) return "—";
+    const elapsed = Date.parse(completedAt) - Date.parse(startedAt);
+    if (!Number.isFinite(elapsed) || elapsed < 0) return "—";
+    if (elapsed === 0) return "0 s";
+    if (elapsed < 100) return "<0.1 s";
+    const tenths = Math.round(elapsed / 100);
+    const minutes = Math.floor(tenths / 600);
+    const seconds = (tenths % 600) / 10;
+    return `${minutes ? `${minutes} min ` : ""}${seconds} s`;
+  }
+
   function formatCount(value) {
     return Number(value || 0).toLocaleString();
   }
@@ -545,7 +557,8 @@
         content.append(error);
       }
       const rows = attempts.map((attempt) => [
-        formatDate(attempt.worker_completed_at), pill(attempt.status), pill(attempt.outcome),
+        formatDate(attempt.worker_completed_at), formatDuration(attempt.worker_started_at, attempt.worker_completed_at),
+        pill(attempt.status), pill(attempt.outcome),
         attempt.matching_method || "—", attempt.error_code || attempt.error_message || "—",
         { node: makeDisclosure(attempt), className: "wrap" },
       ]);
@@ -555,7 +568,7 @@
       document.getElementById("detail-error").textContent = "";
       document.getElementById("detail-content").replaceChildren(content);
       document.getElementById("attempts-table").replaceChildren(makeTable(
-        ["Completed", "Status", "Outcome", "Match", "Latest error", "Evidence"], rows, "Attempt history table",
+        ["Completed", "Duration", "Status", "Outcome", "Match", "Latest error", "Evidence"], rows, "Attempt history table",
       ));
       setPager("attempts", offset, attemptsTotal,
         () => { attemptsOffset = Math.max(0, offset - PAGE_SIZE); refreshDetail(); },

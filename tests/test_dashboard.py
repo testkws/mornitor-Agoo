@@ -497,6 +497,52 @@ def test_mobile_tables_and_place_dialog_are_accessible(page):
     expect(page.get_by_role("region", name="Operational logs table")).to_have_attribute("tabindex", "0")
 
 
+@pytest.mark.parametrize(("theme", "width"), [("light", 1440), ("dark", 375)])
+def test_place_attempt_history_shows_processing_durations(page, theme, width):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      const start = '2026-11-03T00:00:00.000Z';
+      const cases = [
+        ['zero', start, start],
+        ['subsecond', start, '2026-11-03T00:00:00.030Z'],
+        ['seconds', start, '2026-11-03T00:00:01.234Z'],
+        ['timezone', '2026-11-03T07:00:00.123456+07:00', '2026-11-03T00:00:01.789012+00:00'],
+        ['minute', start, '2026-11-03T00:01:02.345Z'],
+        ['long', start, '2026-11-03T01:01:02.345Z'],
+        ['rounding', start, '2026-11-03T00:00:59.960Z'],
+        ['missing-start', null, start],
+        ['missing-end', start, null],
+        ['invalid-start', 'invalid', start],
+        ['invalid-end', start, 'invalid'],
+        ['negative', '2026-11-03T00:00:01.000Z', start],
+      ];
+      state.attempts = cases.map(([name, started, completed]) => ({
+        worker_id: state.workerA, osm_id: 'node/000', attempt_id: name,
+        status: 'checked', outcome: 'found', error_code: name,
+        worker_started_at: started, worker_completed_at: completed,
+      }));
+    }""")
+
+    show(page, "places")
+    page.get_by_role("button", name="Place 000", exact=True).click()
+    dialog = page.get_by_role("dialog", name=re.compile("Place 000"))
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text("queue time is excluded")
+    history = dialog.get_by_role("region", name="Attempt history table")
+    expect(history.get_by_role("columnheader", name="Duration")).to_be_visible()
+    for name, expected in (
+        ("zero", "0 s"), ("subsecond", "<0.1 s"), ("seconds", "1.2 s"), ("timezone", "1.7 s"),
+        ("minute", "1 min 2.3 s"), ("long", "61 min 2.3 s"), ("rounding", "1 min 0 s"),
+        ("missing-start", "—"), ("missing-end", "—"), ("invalid-start", "—"),
+        ("invalid-end", "—"), ("negative", "—"),
+    ):
+        row = history.get_by_role("row").filter(has=page.get_by_role("cell", name=name, exact=True))
+        expect(row.locator("td").nth(1)).to_have_text(expected)
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
 @pytest.mark.parametrize("old_error", [False, True])
 def test_older_place_response_cannot_replace_newer_search(page, old_error):
     show(page, "places")
@@ -634,11 +680,16 @@ def test_disappearing_worker_and_late_worker_refresh(page):
 
 
 def test_detail_paging_handles_shrinking_history(page):
+    page.evaluate("""() => window.monitoringTest.state.attempts.forEach((attempt, index) => {
+      attempt.worker_started_at = new Date(new Date(attempt.worker_completed_at).getTime() - (index + 1) * 1000).toISOString();
+    })""")
     show(page, "places")
     page.get_by_role("button", name="Place 000", exact=True).click()
     expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 3")
+    expect(page.get_by_role("row").filter(has_text="Attempt 000").locator("td").nth(1)).to_have_text("1 s")
     page.locator("#attempts-next").click()
     expect(page.get_by_text("Attempt 050", exact=True)).to_be_visible()
+    expect(page.get_by_role("row").filter(has_text="Attempt 050").locator("td").nth(1)).to_have_text("51 s")
     page.evaluate("window.monitoringTest.state.attempts = window.monitoringTest.state.attempts.slice(0, 1)")
     page.evaluate("window.monitoringTest.tick()")
     expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 1")
