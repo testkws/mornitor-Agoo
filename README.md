@@ -26,8 +26,10 @@ configured. Anyone with the URL can read worker IDs, place evidence, and logs,
 so keep sensitive data out of event payloads. Worker credentials and ingestion
 stay closed to `anon`.
 
-The UI uses a navy, turquoise, and gold palette. It follows the system
-light/dark preference and has a manual theme toggle that remembers your choice.
+The UI uses teal (`#008080`), soft gray (`#E0E0E0`), and white (`#FFFFFF`).
+It follows the system light/dark preference and has a manual theme toggle that
+remembers your choice. The dark palette keeps the same teal character, while
+warning and error colors remain distinct for operational status.
 
 ## Overview metrics
 

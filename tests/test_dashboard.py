@@ -360,26 +360,51 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
         linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
         return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
 
-    pairs = [("--ink", "--surface"), ("--muted", "--surface-2"), ("--accent", "--accent-soft"),
-             ("--gold-text", "--gold-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"),
-             ("--info", "--info-soft"), ("--accent-ink", "--action")]
+    pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--surface-2"),
+             ("--accent", "--bg"), ("--accent", "--accent-soft"), ("--warn", "--warn-soft"),
+             ("--bad", "--bad-soft"), ("--info", "--info-soft"), ("--accent-ink", "--action"),
+             ("--accent-ink", "--action-hover")]
     for theme in ("light", "dark"):
         page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
         colors = page.evaluate("""() => {
           const styles = getComputedStyle(document.documentElement);
-          return Object.fromEntries(['--brand-navy', '--brand-turquoise', '--brand-gold', '--bg', '--ink',
-            '--surface', '--muted', '--surface-2', '--accent', '--accent-soft', '--gold-text', '--gold-soft',
-            '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft', '--accent-ink', '--action']
+          return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
+            '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft', '--accent-ink', '--action',
+            '--action-hover']
             .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
         }""")
-        assert colors["--brand-navy"] == "#0a1828"
-        assert colors["--brand-turquoise"] == "#178582"
-        assert colors["--brand-gold"] == "#bfa181"
-        if theme == "dark":
-            assert colors["--bg"] == "#0a1828"
         for foreground, background in pairs:
             low, high = sorted((luminance(colors[foreground]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 4.5, (theme, foreground, background)
+
+    page.evaluate("document.documentElement.dataset.theme = 'light'")
+    rendered = page.evaluate("""() => ({
+      background: getComputedStyle(document.body).backgroundColor,
+      logo: getComputedStyle(document.querySelector('.logo')).backgroundColor,
+      card: getComputedStyle(document.querySelector('.summary-card')).backgroundColor,
+      cardBorder: getComputedStyle(document.querySelector('.summary-card')).borderTopColor,
+      action: getComputedStyle(document.querySelector('#place-search')).backgroundColor,
+      navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
+    })""")
+    assert rendered == {
+        "background": "rgb(255, 255, 255)",
+        "logo": "rgb(0, 128, 128)",
+        "card": "rgb(255, 255, 255)",
+        "cardBorder": "rgb(224, 224, 224)",
+        "action": "rgb(0, 128, 128)",
+        "navigation": "rgb(0, 109, 109)",
+    }
+    show(page, "places")
+    page.locator("#place-search").hover()
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(0, 109, 109)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")
+
+    page.emulate_media(color_scheme="dark")
+    page.evaluate("delete document.documentElement.dataset.theme")
+    system_dark = page.evaluate("getComputedStyle(document.body).backgroundColor")
+    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    assert page.evaluate("getComputedStyle(document.body).backgroundColor") == system_dark
+    assert system_dark != rendered["background"]
 
     page.set_viewport_size({"width": 375, "height": 900})
     for selector in ("#theme-toggle", "#refresh", "#active-worker"):
