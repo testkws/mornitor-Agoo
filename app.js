@@ -9,6 +9,8 @@
   const eventDetails = new Map();
   const attemptEvidence = new Map();
   const detailLoads = new Map();
+  const placeAttemptTimes = new Map();
+  const placeAttemptLoads = new Map();
   let client = null;
   let workers = [];
   let activeWorker = "";
@@ -16,6 +18,7 @@
   let placesOffset = 0;
   let placesTotal = 0;
   let placeFilters = { query: "", outcome: "", queueStatus: "", review: null };
+  let placeTimeSignature = "";
   let logsOffset = 0;
   let logsTotal = 0;
   let logFilters = { severity: "", from: "", to: "" };
@@ -46,10 +49,15 @@
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
   }
 
-  function formatDuration(startedAt, completedAt) {
-    if (!startedAt || !completedAt) return "—";
+  function durationMilliseconds(startedAt, completedAt) {
+    if (!startedAt || !completedAt) return null;
     const elapsed = Date.parse(completedAt) - Date.parse(startedAt);
-    if (!Number.isFinite(elapsed) || elapsed < 0) return "—";
+    return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null;
+  }
+
+  function formatDuration(startedAt, completedAt) {
+    const elapsed = durationMilliseconds(startedAt, completedAt);
+    if (elapsed === null) return "—";
     if (elapsed === 0) return "0 s";
     if (elapsed < 100) return "<0.1 s";
     const tenths = Math.round(elapsed / 100);
@@ -545,6 +553,128 @@
     refreshCurrent();
   }
 
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const attemptKey = (workerId, attemptId) => JSON.stringify([workerId, attemptId]);
+
+  async function placeDurations(places) {
+    const requested = new Map();
+    places.forEach((place) => {
+      if (UUID.test(place.worker_id || "") && UUID.test(place.latest_attempt_id || "")) {
+        requested.set(attemptKey(place.worker_id, place.latest_attempt_id), {
+          workerId: place.worker_id, attemptId: place.latest_attempt_id,
+        });
+      }
+    });
+    const needed = Array.from(requested, ([key, pair]) => ({ key, ...pair }))
+      .filter(({ key }) => !placeAttemptTimes.has(key) && !placeAttemptLoads.has(key));
+
+    if (needed.length) {
+      const groups = new Map();
+      needed.forEach(({ workerId, attemptId }) => {
+        if (!groups.has(workerId)) groups.set(workerId, []);
+        groups.get(workerId).push(attemptId);
+      });
+      // UUID validation above makes these raw PostgREST filters safe. Grouping
+      // by worker preserves the composite attempt identity in a single request.
+      const filter = Array.from(groups, ([workerId, ids]) =>
+        `and(worker_id.eq.${workerId},attempt_id.in.(${ids.join(",")}))`).join(",");
+      const request = (async () => {
+        const result = await client.from("monitoring_attempts")
+          .select("worker_id,attempt_id,osm_id,worker_started_at,worker_completed_at").or(filter);
+        (resultOrThrow(result) || []).forEach((attempt) => {
+          const key = attemptKey(attempt.worker_id, attempt.attempt_id);
+          if (requested.has(key)) placeAttemptTimes.set(key, attempt);
+        });
+      })();
+      needed.forEach(({ key }) => placeAttemptLoads.set(key, request));
+      const clear = () => needed.forEach(({ key }) => {
+        if (placeAttemptLoads.get(key) === request) placeAttemptLoads.delete(key);
+      });
+      request.then(clear, clear);
+    }
+
+    await Promise.all(new Set(Array.from(requested.keys(), (key) => placeAttemptLoads.get(key)).filter(Boolean)));
+    return places.flatMap((place, index) => {
+      const attempt = placeAttemptTimes.get(attemptKey(place.worker_id, place.latest_attempt_id));
+      if (!attempt || attempt.osm_id !== place.osm_id) return [];
+      const elapsed = durationMilliseconds(attempt.worker_started_at, attempt.worker_completed_at);
+      return elapsed === null ? [] : [{ place, attempt, elapsed, index }];
+    }).sort((a, b) => b.elapsed - a.elapsed || a.index - b.index);
+  }
+
+  async function renderPlaceTimes(places, signature, isCurrent) {
+    const container = document.getElementById("place-time-chart");
+    const previous = container.querySelector(".place-time-list");
+    if (signature !== placeTimeSignature || !previous) {
+      const loading = el("p", "chart-empty", "Loading inspection times…");
+      loading.setAttribute("role", "status");
+      container.replaceChildren(loading);
+    }
+    placeTimeSignature = signature;
+    container.setAttribute("aria-busy", "true");
+    try {
+      const durations = await placeDurations(places);
+      if (!isCurrent()) return "";
+      const focusedList = container.querySelector(".place-time-list");
+      const hadFocus = focusedList && focusedList === document.activeElement;
+      const scrollTop = focusedList?.scrollTop || 0;
+      if (!durations.length) {
+        container.replaceChildren(el("p", "chart-empty", places.length
+          ? "No completed inspection times are available for these places yet."
+          : "No places to compare on this page."));
+        if (hadFocus) document.getElementById("place-time-title").focus({ preventScroll: true });
+        return "";
+      }
+      const maximum = Math.max(...durations.map(({ elapsed }) => elapsed));
+      const list = el("ol", "place-time-list");
+      list.tabIndex = 0;
+      list.setAttribute("aria-label", "Inspection times, longest first");
+      durations.forEach(({ place, attempt, elapsed }) => {
+        const item = el("li", "place-time-item");
+        item.dataset.osmId = place.osm_id;
+        item.dataset.workerId = place.worker_id;
+        const heading = el("div", "place-time-heading");
+        const label = el("span", "place-time-label", place.source_record?.name || "(unnamed)");
+        label.append(el("span", "place-time-meta", `${place.osm_id} · ${place.worker_id.slice(0, 8)}`));
+        heading.append(label, el("strong", "place-time-value",
+          formatDuration(attempt.worker_started_at, attempt.worker_completed_at)));
+        const track = el("div", "chart-bar-track");
+        track.setAttribute("aria-hidden", "true");
+        const fill = el("span", "chart-bar-fill");
+        fill.style.width = `${maximum ? elapsed * 100 / maximum : 0}%`;
+        track.append(fill);
+        item.append(heading, track);
+        list.append(item);
+      });
+      const missing = places.length - durations.length;
+      const note = el("p", "place-time-note", `${formatCount(durations.length)} of ${formatCount(places.length)} ` +
+        `${places.length === 1 ? "place" : "places"} ${durations.length === 1 ? "has" : "have"} a recorded time. ` +
+        `Longest first.${missing ? ` ${formatCount(missing)} unavailable.` : ""}`);
+      container.replaceChildren(list, note);
+      if (list.scrollHeight > list.clientHeight) note.textContent += " Scroll to see all.";
+      if (hadFocus) {
+        list.focus({ preventScroll: true });
+        list.scrollTop = scrollTop;
+      }
+      return "";
+    } catch {
+      if (!isCurrent()) return "";
+      const hadFocus = container.contains(document.activeElement);
+      const message = el("p", "chart-empty", "Unable to load inspection times.");
+      const retry = el("button", "secondary", "Retry chart");
+      retry.type = "button";
+      retry.addEventListener("click", () => {
+        document.getElementById("place-time-title").focus({ preventScroll: true });
+        refreshCurrent();
+      });
+      container.replaceChildren(message, retry);
+      if (hadFocus) retry.focus({ preventScroll: true });
+      return "Inspection time chart is unavailable. Retrying automatically.";
+    } finally {
+      if (isCurrent()) container.removeAttribute("aria-busy");
+    }
+  }
+
   async function renderPlaces(isCurrent) {
     const { query, outcome, queueStatus, review } = placeFilters;
     const params = {
@@ -563,7 +693,7 @@
     const fetchPage = async (offset) => {
       if (useRpc) return client.rpc("monitoring_places_page", { ...params, p_offset: offset });
       let request = client.from("monitoring_place_results")
-        .select("worker_id,osm_id,name:source_record->>name,outcome,queue_status,review_flag,latest_error_code", { count: "exact" })
+        .select("worker_id,osm_id,name:source_record->>name,outcome,queue_status,review_flag,latest_error_code,latest_attempt_id", { count: "exact" })
         .order("osm_id", { ascending: true })
         .order("worker_id", { ascending: true })
         .range(offset, offset + PAGE_SIZE - 1);
@@ -590,7 +720,8 @@
     }
     placesOffset = offset;
     placesTotal = Number(data.total || 0);
-    const rows = (data.rows || []).map((place) => {
+    const places = data.rows || [];
+    const rows = places.map((place) => {
       const name = place.source_record?.name || "(unnamed)";
       const button = el("button", "link", name);
       button.type = "button";
@@ -608,6 +739,7 @@
     setPager("places", offset, placesTotal,
       () => { placesOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
       () => { placesOffset = offset + PAGE_SIZE; refreshCurrent(); });
+    return renderPlaceTimes(places, JSON.stringify([activeWorker, placeFilters, offset]), isCurrent);
   }
 
   function openDetail(place) {
@@ -898,7 +1030,7 @@
       let warning = "";
       if (view === "overview") warning = await renderOverview(isCurrent);
       else if (view === "places") {
-        await renderPlaces(isCurrent);
+        warning = await renderPlaces(isCurrent);
         if (!isCurrent()) return;
         if (detailPlace && document.getElementById("place-dialog").open) {
           const updated = await refreshDetail({ refreshPlace: true, isViewCurrent: isCurrent, status });

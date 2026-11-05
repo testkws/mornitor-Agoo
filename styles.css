@@ -288,6 +288,13 @@ h3 { margin: 22px 0 10px; font-size: .95rem; }
 .chart-bar-fill { display: block; height: 100%; border-radius: inherit; background: var(--chart-fill); }
 .chart-empty { flex: 1; margin: 0; padding: 34px 0; color: var(--muted); font-size: .82rem; }
 .chart-note { margin: auto 0 0; padding-top: 20px; color: var(--muted); font-size: .73rem; }
+.place-time-panel { margin: 0 0 16px; }
+.place-time-list { display: grid; gap: 14px; max-height: min(360px, 55vh); overflow-y: auto; list-style: none; margin: 16px 0 0; padding: 4px 8px 4px 0; }
+.place-time-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; font-size: .8rem; }
+.place-time-label { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+.place-time-meta { display: block; color: var(--muted); font-size: .7rem; font-weight: 500; }
+.place-time-value { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.place-time-note { margin: 12px 0 0; color: var(--muted); font-size: .73rem; }
 .worker-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 38px 0 15px; }
 .worker-section-title { margin: 0; font-size: 1.25rem; }
 .worker-section-note { margin: 0; color: var(--muted); font-size: .75rem; text-align: right; }

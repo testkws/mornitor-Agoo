@@ -99,6 +99,7 @@
     let head = false;
     let columns = "*";
     let search = "";
+    let timePairs = null;
     let offset = 0;
     let limit = 50;
     function project(row) {
@@ -114,6 +115,16 @@
       eq(name, value) { filters[name] = value; return builder; },
       in(name, values) { choices[name] = values; return builder; },
       or(value) {
+        if (table === "monitoring_attempts") {
+          const groups = Array.from(value.matchAll(/and\(worker_id\.eq\.([0-9a-f-]+),attempt_id\.in\.\(([0-9a-f,-]+)\)\)/gi));
+          if (!groups.length || groups.map((group) => group[0]).join(",") !== value) {
+            throw new Error("Unexpected attempt timing filter");
+          }
+          timePairs = groups.flatMap((group) => group[2].split(",").map((attempt_id) => ({
+            worker_id: group[1], attempt_id,
+          })));
+          return builder;
+        }
         const match = /^osm_id\.ilike\.\*([^*]*)\*,source_record->>name\.ilike\.\*([^*]*)\*$/u.exec(value);
         if (!match || match[1] !== match[2]) throw new Error(`Unexpected search filter: ${value}`);
         search = match[1];
@@ -146,17 +157,18 @@
           kind = "logs";
           rows = state.logs.filter((row) => matches(row, filters, ranges, choices));
         } else if (table === "monitoring_attempts") {
-          if (!head) kind = "attempts";
+          if (!head) kind = timePairs ? "place-times" : "attempts";
           else if (choices.outcome) kind = "metric-matched";
           else if (filters.error_code === "BLOCKED") kind = "metric-blocked";
           else if (filters.error_code === "CONSENT_REQUIRED") kind = "metric-consent";
           else if (filters.status === "retry_wait") kind = "metric-retry";
           else kind = "metric-total";
-          rows = state.attempts.filter((row) => matches(row, filters, ranges, choices));
+          rows = state.attempts.filter((row) => matches(row, filters, ranges, choices) &&
+            (!timePairs || timePairs.some((pair) => pair.worker_id === row.worker_id && pair.attempt_id === row.attempt_id)));
         } else {
           throw new Error(`Unexpected table: ${table}`);
         }
-        return submit(kind, { filters, ranges, choices, head, offset, limit, columns, p_query: search, via: "table" }, {
+        return submit(kind, { filters, ranges, choices, head, offset, limit, columns, p_query: search, via: "table", timePairs }, {
           data: head ? null : (kind === "workers" ? rows : rows.slice(offset, offset + limit)).map(project),
           count: rows.length,
           error: null,

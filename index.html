@@ -54,6 +54,11 @@
         <div class="filter-actions"><button id="place-reset" class="secondary" type="button">Reset filters</button><button id="place-search" type="submit">Apply filters</button></div>
         <p class="filter-hint">Apply changes to update results. The worker selection applies across sections.</p>
       </form>
+      <section class="chart-panel place-time-panel" aria-labelledby="place-time-title">
+        <h3 id="place-time-title" class="chart-title" tabindex="-1">Inspection time by place</h3>
+        <p class="chart-description">Latest recorded attempt on this page, from worker start to completion. Queue time is excluded.</p>
+        <div id="place-time-chart"><p class="chart-empty" role="status">Loading inspection times…</p></div>
+      </section>
       <div id="places-table"><p class="view-placeholder" role="status">Loading places…</p></div>
       <nav class="pager" aria-label="Places pages"><button id="places-prev" class="secondary" type="button" disabled>Previous</button><span id="places-page" aria-live="polite"></span><button id="places-next" class="secondary" type="button" disabled>Next</button></nav>
     </section>

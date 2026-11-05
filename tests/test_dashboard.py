@@ -73,6 +73,39 @@ def request_offsets(page, kind):
     )
 
 
+def seed_place_times(page):
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      const id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
+      const place = (worker, osm, name, attempt) => ({
+        worker_id: worker, osm_id: osm, source_record: {name}, latest_attempt_id: id(attempt),
+        outcome: 'found', queue_status: 'checked', review_flag: false,
+      });
+      state.places = [
+        place(state.workerA, 'node/1', 'Quick place', 1),
+        place(state.workerA, 'node/2', 'Slow place', 2),
+        place(state.workerB, 'node/3', 'Other worker place', 1),
+        place(state.workerA, 'node/4', 'Missing start', 3),
+        place(state.workerA, 'node/5', 'Pending place', 4),
+        place(state.workerA, 'node/6', 'Mismatched place', 5),
+        place(state.workerA, 'node/7', 'Zero place', 6),
+      ];
+      const start = '2026-11-03T00:00:00.000Z';
+      const attempt = (worker, osm, number, started, completed) => ({
+        worker_id: worker, osm_id: osm, attempt_id: id(number), status: 'checked',
+        outcome: 'found', worker_started_at: started, worker_completed_at: completed,
+      });
+      state.attempts = [
+        attempt(state.workerA, 'node/1', 1, start, '2026-11-03T00:00:02.000Z'),
+        attempt(state.workerA, 'node/2', 2, start, '2026-11-03T00:00:10.000Z'),
+        attempt(state.workerB, 'node/3', 1, start, '2026-11-03T00:00:05.000Z'),
+        attempt(state.workerA, 'node/4', 3, null, '2026-11-03T00:00:03.000Z'),
+        attempt(state.workerA, 'node/other', 5, start, '2026-11-03T00:00:04.000Z'),
+        attempt(state.workerA, 'node/7', 6, start, start),
+      ];
+    }""")
+
+
 def metric(page, name):
     return page.locator(f'[data-metric="{name}"]')
 
@@ -1291,3 +1324,171 @@ def test_removed_selected_worker_refreshes_overview_for_all_workers(page):
     finish(page, old_request)
     expect(page.locator(f'#active-worker option[value="{worker_a}"]')).to_have_count(0)
     expect(page.locator(".worker-panel")).to_contain_text("Worker B")
+
+
+def test_place_time_chart_compares_latest_recorded_attempts(page):
+    seed_place_times(page)
+    show(page, "places")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("Queue time is excluded")
+    expect(chart).to_contain_text("4 of 7 places have a recorded time")
+    expect(chart).to_contain_text("3 unavailable")
+    rows = chart.locator(".place-time-item")
+    expect(rows).to_have_count(4)
+    for index, (name, duration, width) in enumerate((
+        ("Slow place", "10 s", "100%"),
+        ("Other worker place", "5 s", "50%"),
+        ("Quick place", "2 s", "20%"),
+        ("Zero place", "0 s", "0%"),
+    )):
+        expect(rows.nth(index)).to_contain_text(name)
+        expect(rows.nth(index).locator(".place-time-value")).to_have_text(duration)
+        assert rows.nth(index).locator(".chart-bar-fill").evaluate("node => node.style.width") == width
+
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').at(-1)")
+    assert request["params"]["columns"] == "worker_id,attempt_id,osm_id,worker_started_at,worker_completed_at"
+    assert len(request["params"]["timePairs"]) == 7
+    assert len({pair["worker_id"] for pair in request["params"]["timePairs"]}) == 2
+
+    worker_a = page.evaluate("window.monitoringTest.state.workerA")
+    page.locator("#active-worker").select_option(worker_a)
+    expect(chart).to_contain_text("3 of 6 places have a recorded time")
+    expect(chart).not_to_contain_text("Other worker place")
+    page.locator("#place-query").fill("Slow place")
+    page.locator("#place-search").click()
+    expect(chart).to_contain_text("1 of 1 place has a recorded time")
+    expect(chart.locator(".place-time-item")).to_have_count(1)
+    expect(chart).to_contain_text("Slow place")
+    page.locator("#place-query").fill("Zero place")
+    page.locator("#place-search").click()
+    expect(chart).to_contain_text("Zero place")
+    expect(chart.locator(".place-time-value")).to_have_text("0 s")
+    assert chart.locator(".chart-bar-fill").evaluate("node => node.style.width") == "0%"
+
+
+def test_place_time_chart_skips_missing_and_invalid_attempt_ids(page):
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      state.places = state.places.slice(0, 2);
+      state.places[0].latest_attempt_id = null;
+      state.places[1].latest_attempt_id = 'invalid),worker_id.eq.anything';
+    }""")
+    show(page, "places")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("No completed inspection times are available")
+    assert not page.evaluate("window.monitoringTest.state.requests.some(r => r.kind === 'place-times')")
+
+
+def test_place_time_chart_caches_records_and_retries_pending_attempts(page):
+    seed_place_times(page)
+    show(page, "places")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("4 of 7 places have a recorded time")
+    page.evaluate("window.monitoringTest.tick()")
+    page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length === 2")
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').at(-1)")
+    assert len(request["params"]["timePairs"]) == 1
+    assert request["params"]["timePairs"][0]["attempt_id"].endswith("000000000004")
+
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      state.attempts.push({
+        worker_id: state.workerA, osm_id: 'node/5',
+        attempt_id: '00000000-0000-4000-8000-000000000004',
+        worker_started_at: '2026-11-03T00:00:00.000Z',
+        worker_completed_at: '2026-11-03T00:00:04.000Z',
+      });
+    }""")
+    page.evaluate("window.monitoringTest.tick()")
+    expect(chart).to_contain_text("5 of 7 places have a recorded time")
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length")
+    hold(page, "places")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "places"))
+    expect(chart).to_contain_text("5 of 7 places have a recorded time")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length") == before
+
+
+def test_place_time_chart_error_does_not_hide_places_and_can_retry(page):
+    seed_place_times(page)
+    hold(page, "place-times")
+    show(page, "places")
+    request_id = pending(page, "place-times")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("Loading inspection times")
+    expect(page.get_by_role("button", name="Slow place", exact=True)).to_be_visible()
+    finish(page, request_id, "Timing unavailable")
+    expect(chart).to_contain_text("Unable to load inspection times")
+    expect(page.locator("#global-error")).to_contain_text("Inspection time chart is unavailable")
+    expect(page.get_by_role("button", name="Slow place", exact=True)).to_be_visible()
+    chart.get_by_role("button", name="Retry chart").click()
+    expect(chart).to_contain_text("4 of 7 places have a recorded time")
+    expect(page.locator("#global-error")).to_be_empty()
+    expect(page.locator("#place-time-title")).to_be_focused()
+
+
+def test_place_time_chart_ignores_old_filters_and_shares_inflight_read(page):
+    seed_place_times(page)
+    hold(page, "place-times")
+    show(page, "places")
+    request_id = pending(page, "place-times")
+    page.locator("#place-query").fill("Slow place")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("Page 1 of 1")
+    finish(page, request_id)
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("1 of 1 place has a recorded time")
+    expect(chart.locator(".place-time-item")).to_have_count(1)
+    expect(chart).to_contain_text("Slow place")
+    expect(chart).not_to_contain_text("Quick place")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length") == 1
+
+
+def test_place_time_chart_paging_scroll_and_focus(page):
+    page.set_viewport_size({"width": 375, "height": 900})
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      const id = index => '00000000-0000-4000-8000-' + String(index + 1).padStart(12, '0');
+      state.places = Array.from({length: 51}, (_, index) => ({
+        worker_id: state.workerA, osm_id: 'node/' + String(index).padStart(3, '0'),
+        source_record: {name: 'Timed place ' + String(index).padStart(3, '0')},
+        latest_attempt_id: id(index), outcome: 'found', queue_status: 'checked', review_flag: false,
+      }));
+      state.attempts = state.places.map((place, index) => ({
+        worker_id: place.worker_id, osm_id: place.osm_id, attempt_id: place.latest_attempt_id,
+        worker_started_at: '2026-11-03T00:00:00.000Z',
+        worker_completed_at: new Date(Date.parse('2026-11-03T00:00:00.000Z') + (index + 1) * 1000).toISOString(),
+      }));
+    }""")
+    show(page, "places")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart).to_contain_text("50 of 50 places have a recorded time")
+    expect(chart.locator(".place-time-item")).to_have_count(50)
+    times = chart.get_by_role("list", name="Inspection times, longest first")
+    times.focus()
+    times.evaluate("node => { node.scrollTop = 100; }")
+    assert times.evaluate("node => node.scrollTop") > 0
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length")
+    hold(page, "places")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "places"))
+    expect(times).to_be_focused()
+    assert times.evaluate("node => node.scrollTop") > 0
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'place-times').length") == before
+    page.locator("#places-next").click()
+    expect(chart).to_contain_text("1 of 1 place has a recorded time")
+    expect(chart).to_contain_text("Timed place 050")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_place_time_chart_handles_long_names_and_large_text(page):
+    seed_place_times(page)
+    page.set_viewport_size({"width": 360, "height": 900})
+    page.evaluate("""() => {
+      document.documentElement.style.fontSize = '200%';
+      window.monitoringTest.state.places[1].source_record.name = 'Place-' + 'P'.repeat(200);
+    }""")
+    show(page, "places")
+    chart = page.get_by_role("region", name="Inspection time by place")
+    expect(chart.locator(".place-time-label").first).to_contain_text("Place-")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

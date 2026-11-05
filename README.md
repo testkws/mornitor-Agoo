@@ -76,6 +76,12 @@ latest snapshots. The charts do not issue additional queries.
 Each place's attempt history shows the time from the worker starting an attempt
 to completing it, excluding queue time. Durations are unavailable when either
 timestamp is missing or invalid, or the completion time precedes the start.
+The Places chart compares the latest recorded attempt for each place on the
+current page, longest first, and counts places without a usable duration.
+Imported snapshots and running attempts may not yet have timing records. The
+dashboard batches timing reads for the visible page and caches completed
+attempt timings in memory, so unchanged attempts are not downloaded again on
+each refresh.
 
 Places with a pending nearest-match suggestion show **Suggested nearest match —
 awaiting review** and the suggestion UUID in their details. These suggestions
