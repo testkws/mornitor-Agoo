@@ -77,6 +77,11 @@ Each place's attempt history shows the time from the worker starting an attempt
 to completing it, excluding queue time. Durations are unavailable when either
 timestamp is missing or invalid, or the completion time precedes the start.
 
+Places with a pending nearest-match suggestion show **Suggested nearest match —
+awaiting review** and the suggestion UUID in their details. These suggestions
+are not normal exports until approved from the scraper server; the dashboard
+remains read-only. Monitoring updates can lag while uploads are queued.
+
 Both environment values become public browser configuration. Never supply a
 worker token, Supabase secret key, or service-role key. The build rejects secret
 and service-role keys. Database RLS controls access to the monitoring data.

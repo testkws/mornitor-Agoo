@@ -688,12 +688,17 @@
         attempts = resultOrThrow(result) || [];
       }
 
+      const pendingReview = place.google_proposal?.review_status === "pending" &&
+        place.google_proposal?.selection_method === "nearest_suggestion";
+      const reviewed = place.google_proposal?.selection_method === "nearest_reviewed";
       const columns = el("div", "detail-columns");
       columns.append(
         detailPanel("OSM source fields", place.source_record),
-        detailPanel("Latest successful Google proposal", place.google_proposal),
+        detailPanel(pendingReview ? "Suggested nearest match — awaiting review" :
+          reviewed ? "Reviewed nearest Google match" : "Latest successful Google proposal", place.google_proposal),
       );
       const content = document.createDocumentFragment();
+      if (pendingReview) content.append(el("p", "muted", "This suggestion is excluded from exports until approved on the scraper server. Use review list to find its ID."));
       content.append(columns, detailPanel("Latest candidates", place.candidates));
       content.append(el("p", "muted", `Matching: ${place.matching_method || "—"} · Similarity: ${place.similarity ?? "—"} · Distance: ${place.distance_m ?? "—"} m · Review flag: ${place.review_flag ? "Yes" : "No"}`));
       if (place.latest_error_code || place.latest_error_message) {

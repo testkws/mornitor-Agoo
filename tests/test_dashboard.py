@@ -739,6 +739,24 @@ def test_refresh_preserves_place_focus_and_dialog_context(page):
     expect(page.get_by_role("region", name="Places table")).to_be_focused()
 
 
+def test_pending_nearest_match_is_labelled_and_requires_server_review(page):
+    page.evaluate("""() => {
+      const place = window.monitoringTest.state.places[0];
+      place.outcome = 'ambiguous';
+      place.queue_status = 'retry_wait';
+      place.review_flag = true;
+      place.google_proposal = {selection_method: 'nearest_suggestion', review_status: 'pending',
+                               suggestion_id: 'example-review-id'};
+    }""")
+    show(page, "places")
+    page.get_by_role("button", name="Place 000", exact=True).click()
+    dialog = page.get_by_role("dialog", name=re.compile("Place 000"))
+    expect(dialog).to_contain_text("Suggested nearest match — awaiting review")
+    expect(dialog).to_contain_text("excluded from exports until approved")
+    expect(dialog).to_contain_text("example-review-id")
+    expect(dialog.get_by_role("button", name=re.compile("approve", re.IGNORECASE))).to_have_count(0)
+
+
 def test_refresh_preserves_expanded_log_details_and_focus(page):
     show(page, "logs")
     table = page.get_by_role("region", name="Operational logs table")
