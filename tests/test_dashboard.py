@@ -314,7 +314,7 @@ def test_summary_uses_head_counts_without_page_limit(page):
     assert requests[-1]["kind"] == "metric-total"
 
 
-@pytest.mark.parametrize("width", [320, 375, 1024, 1440])
+@pytest.mark.parametrize("width", [320, 360, 375, 768, 1024, 1440])
 def test_responsive_layout_and_theme(page, width):
     page.set_viewport_size({"width": width, "height": 900})
     for view in ("overview", "places", "logs"):
@@ -383,15 +383,15 @@ def test_manual_theme_choice_survives_reload(browser):
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to dark theme")
     expect(page.locator("#theme-icon-moon")).to_be_visible()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 227)")
-    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(133, 133, 133)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(242, 249, 250)")
+    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(86, 137, 142)")
     assert page.evaluate("document.documentElement.dataset.theme") == "light"
 
     page.evaluate("localStorage.setItem('theme', 'system')")
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to light theme")
     page.locator("#theme-toggle").click()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 227)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(242, 249, 250)")
     assert page.evaluate("localStorage.getItem('theme')") == "light"
     page.close()
 
@@ -405,7 +405,7 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
     pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--surface-2"),
              ("--accent", "--bg"), ("--accent", "--surface"), ("--accent", "--accent-soft"),
              ("--ok", "--ok-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"),
-             ("--info", "--info-soft"),
+             ("--info", "--info-soft"), ("--brand-deep", "--brand-aqua"),
              ("--accent-ink", "--action"), ("--accent-ink", "--action-hover")]
     for theme in ("light", "dark"):
         page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
@@ -413,19 +413,23 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
           const styles = getComputedStyle(document.documentElement);
           return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
             '--ok', '--ok-soft', '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft',
-            '--brand-slate', '--control-line', '--accent-ink', '--action', '--action-hover']
+            '--brand-deep', '--brand-teal', '--brand-rust', '--brand-aqua', '--brand-mist', '--chart-fill', '--chart-other',
+            '--control-line', '--accent-ink', '--action', '--action-hover']
             .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
         }""")
+        assert [colors[name] for name in ("--brand-deep", "--brand-teal", "--brand-rust", "--brand-aqua", "--brand-mist")] == [
+            "#003135", "#024950", "#964734", "#0fa4af", "#afdde5"]
         for foreground, background in pairs:
             low, high = sorted((luminance(colors[foreground]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 4.5, (theme, foreground, background)
         for background in ("--bg", "--surface-2"):
-            low, high = sorted((luminance(colors["--brand-slate"]), luminance(colors[background])))
-            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--brand-slate", background)
-        if theme == "light":
-            for background in ("--bg", "--surface", "--surface-2", "--accent-soft"):
-                low, high = sorted((luminance(colors["--control-line"]), luminance(colors[background])))
-                assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--control-line", background)
+            low, high = sorted((luminance(colors["--chart-fill"]), luminance(colors[background])))
+            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--chart-fill", background)
+        low, high = sorted((luminance(colors["--accent"]), luminance(colors["--chart-other"])))
+        assert (high + 0.05) / (low + 0.05) >= 3, (theme, "chart segments")
+        for background in ("--bg", "--surface", "--surface-2", "--accent-soft"):
+            low, high = sorted((luminance(colors["--control-line"]), luminance(colors[background])))
+            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--control-line", background)
 
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     rendered = page.evaluate("""() => ({
@@ -438,24 +442,42 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
       navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
     })""")
     assert rendered == {
-        "background": "rgb(255, 255, 227)",
-        "logo": "rgb(74, 74, 74)",
+        "background": "rgb(242, 249, 250)",
+        "logo": "rgb(15, 164, 175)",
         "card": "rgb(255, 255, 255)",
-        "cardBorder": "rgb(203, 203, 203)",
-        "action": "rgb(74, 74, 74)",
-        "avatar": "rgb(233, 238, 242)",
-        "navigation": "rgb(109, 129, 150)",
+        "cardBorder": "rgb(175, 221, 229)",
+        "action": "rgb(2, 73, 80)",
+        "avatar": "rgb(225, 243, 244)",
+        "navigation": "rgb(8, 123, 131)",
     }
+    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    dark_rendered = page.evaluate("""() => ({
+      background: getComputedStyle(document.body).backgroundColor,
+      card: getComputedStyle(document.querySelector('.summary-card')).backgroundColor,
+      action: getComputedStyle(document.querySelector('#place-search')).backgroundColor,
+      actionText: getComputedStyle(document.querySelector('#place-search')).color,
+      navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
+    })""")
+    assert dark_rendered == {
+        "background": "rgb(0, 49, 53)",
+        "card": "rgb(2, 73, 80)",
+        "action": "rgb(15, 164, 175)",
+        "actionText": "rgb(0, 49, 53)",
+        "navigation": "rgb(84, 203, 208)",
+    }
+    page.evaluate("document.documentElement.dataset.theme = 'light'")
     show(page, "places")
     for selector in ("#active-worker", "#refresh", "#theme-toggle", "#place-query", "#place-outcome", "#places-next"):
-        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(133, 133, 133)")
+        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(86, 137, 142)")
     page.locator("#place-search").hover()
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(52, 52, 52)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(0, 49, 53)")
     expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")
 
     page.emulate_media(color_scheme="dark")
     page.evaluate("delete document.documentElement.dataset.theme")
     system_dark = page.evaluate("getComputedStyle(document.body).backgroundColor")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(175, 221, 229)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(0, 49, 53)")
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     assert page.evaluate("getComputedStyle(document.body).backgroundColor") == system_dark
     assert system_dark != rendered["background"]
@@ -467,6 +489,10 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
 
 
 def test_dashboard_navigation_is_keyboard_accessible(page):
+    skip = page.get_by_role("link", name="Skip to dashboard content")
+    skip.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#main-content")).to_be_focused()
     overview = page.locator('button[data-view="overview"]')
     places = page.locator('button[data-view="places"]')
     overview.focus()
@@ -478,11 +504,246 @@ def test_dashboard_navigation_is_keyboard_accessible(page):
     expect(overview).to_have_attribute("aria-pressed", "false")
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_worker_picker_uses_theme_and_supports_keyboard(page, theme):
+    page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+    picker = page.locator("#active-worker")
+    worker_a = page.evaluate("window.monitoringTest.state.workerA")
+    picker.focus()
+    expect(picker).to_be_focused()
+    expect(picker).to_have_css("outline-style", "solid")
+    page.keyboard.press("Enter")
+
+    if page.evaluate("CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))') && matchMedia('(hover: hover) and (pointer: fine)').matches"):
+        assert picker.evaluate("node => node.matches(':open')")
+        expected_surface = "rgb(255, 255, 255)" if theme == "light" else "rgb(2, 73, 80)"
+        assert picker.evaluate("node => getComputedStyle(node, '::picker(select)').backgroundColor") == expected_surface
+        expect(picker.locator("option:checked")).to_have_css("background-color", "rgb(175, 221, 229)")
+        expect(picker.locator("option:checked")).to_have_css("color", "rgb(0, 49, 53)")
+
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    expect(picker).to_have_value(worker_a)
+    expect(page.locator("#log-worker")).to_have_value(worker_a)
+    page.keyboard.press("Enter")
+    page.keyboard.press("Escape")
+    expect(picker).to_have_value(worker_a)
+    expect(picker).to_be_focused()
+
+
+def test_touch_device_keeps_native_worker_picker(browser):
+    page = browser.new_page(viewport={"width": 375, "height": 900}, is_mobile=True, has_touch=True)
+    page.route("**/*", lambda route: route.abort())
+    page.set_content(HTML)
+    page.add_style_tag(content=STYLES)
+    page.add_script_tag(content=MOCK)
+    page.add_script_tag(content=APP)
+    expect(page.locator("#live-text")).to_contain_text("Updated")
+    assert page.evaluate("matchMedia('(pointer: coarse)').matches")
+    expect(page.locator("#active-worker")).to_have_css("appearance", "auto")
+    worker_b = page.evaluate("window.monitoringTest.state.workerB")
+    page.locator("#active-worker").select_option(worker_b)
+    expect(page.locator("#log-worker")).to_have_value(worker_b)
+    page.close()
+
+
+def test_worker_picker_handles_long_names_and_many_options(page):
+    page.set_viewport_size({"width": 375, "height": 700})
+    page.evaluate("""() => {
+      window.monitoringTest.state.workers = Array.from({length: 30}, (_, index) => ({
+        worker_id: `worker-${index}`, display_name: `Worker ${index} ` + 'W'.repeat(200),
+      }));
+    }""")
+    page.locator("#refresh").click()
+    picker = page.locator("#active-worker")
+    expect(picker.locator("option")).to_have_count(31)
+    picker.click()
+    if page.evaluate("CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))') && matchMedia('(hover: hover) and (pointer: fine)').matches"):
+        assert picker.evaluate("node => node.matches(':open')")
+        height = picker.evaluate("node => parseFloat(getComputedStyle(node, '::picker(select)').height)")
+        assert height <= 320
+        option_box = picker.locator("option").first.bounding_box()
+        assert option_box["x"] >= 0 and option_box["x"] + option_box["width"] <= 375
+    page.keyboard.press("End")
+    page.keyboard.press("Enter")
+    expect(picker).to_have_value("worker-29")
+    expect(picker).to_have_attribute("title", re.compile(r"^Worker 29 W{200}"))
+    expect(page.locator("#log-worker")).to_have_attribute("title", re.compile(r"^Worker 29 W{200}"))
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    picker.click()
+    if page.evaluate("CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))') && matchMedia('(hover: hover) and (pointer: fine)').matches"):
+        assert picker.evaluate("node => node.matches(':open')")
+        selected_box = picker.locator("option:checked").bounding_box()
+        assert selected_box["x"] >= 0 and selected_box["x"] + selected_box["width"] <= 375
+    page.keyboard.press("Escape")
+
+
+def test_filter_edits_apply_only_on_submit_and_reset_preserves_worker(page):
+    worker_b = page.evaluate("window.monitoringTest.state.workerB")
+    show(page, "places")
+    page.locator("#active-worker").select_option(worker_b)
+    expect(page.get_by_role("button", name="Worker B place")).to_be_visible()
+    page.locator("#place-query").fill("not-found")
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').length")
+    page.evaluate("window.monitoringTest.tick()")
+    page.wait_for_function("before => window.monitoringTest.state.requests.filter(r => r.kind === 'places').length > before", arg=before)
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1).params.p_query") == ""
+    expect(page.get_by_role("button", name="Worker B place")).to_be_visible()
+    page.locator("#place-query").press("Enter")
+    expect(page.get_by_role("region", name="Places table")).to_contain_text("No places match the current filters")
+    page.get_by_role("form", name="Place filters").get_by_role("button", name="Reset filters").click()
+    expect(page.locator("#place-query")).to_have_value("")
+    expect(page.locator("#active-worker")).to_have_value(worker_b)
+    expect(page.get_by_role("button", name="Worker B place")).to_be_visible()
+
+
+def test_log_date_validation_and_filter_reset(page):
+    show(page, "logs")
+    expect(page.get_by_text("Event 000", exact=True)).to_be_visible()
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'logs').length")
+    page.locator("#log-from").fill("2026-01-03T00:00")
+    page.locator("#log-to").fill("2026-01-01T00:00")
+    page.locator("#log-search").click()
+    expect(page.locator("#log-date-error")).to_have_text("From must be on or before To.")
+    expect(page.locator("#log-from")).to_have_attribute("aria-invalid", "true")
+    expect(page.locator("#log-to")).to_have_attribute("aria-invalid", "true")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'logs').length") == before
+    expect(page.get_by_text("Event 000", exact=True)).to_be_visible()
+
+    page.locator("#log-from").fill("2025-12-31T00:00")
+    expect(page.locator("#log-date-error")).to_be_hidden()
+    page.locator("#log-severity").select_option("warning")
+    page.locator("#log-search").click()
+    expect(page.get_by_role("region", name="Operational logs table")).to_contain_text("No events match the current filters")
+    page.locator("#log-severity").select_option("info")
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'logs').length")
+    page.evaluate("window.monitoringTest.tick()")
+    page.wait_for_function("before => window.monitoringTest.state.requests.filter(r => r.kind === 'logs').length > before", arg=before)
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'logs').at(-1).params.filters.severity") == "warning"
+    expect(page.get_by_role("region", name="Operational logs table")).to_contain_text("No events match the current filters")
+    page.locator("#log-reset").click()
+    expect(page.locator("#log-from")).to_have_value("")
+    expect(page.locator("#log-to")).to_have_value("")
+    expect(page.locator("#log-severity")).to_have_value("")
+    expect(page.get_by_text("Event 000", exact=True)).to_be_visible()
+
+
+def test_place_loading_failure_is_visible_and_recoverable(page):
+    hold(page, "places")
+    show(page, "places")
+    request_id = pending(page, "places")
+    expect(page.locator("#places-view")).to_have_attribute("aria-busy", "true")
+    expect(page.locator("#live-text")).to_have_text("Updating…")
+    expect(page.locator("#places-table")).to_contain_text("Loading places…")
+    finish(page, request_id, "Places unavailable")
+    expect(page.locator("#global-error")).to_have_text("Places unavailable")
+    expect(page.locator("#stale-note")).to_be_hidden()
+    expect(page.locator("#places-table")).to_contain_text("Unable to load places")
+    expect(page.locator("#places-view")).not_to_have_attribute("aria-busy", "true")
+    page.locator("#place-search").click()
+    expect(page.get_by_role("button", name="Place 000", exact=True)).to_be_visible()
+    expect(page.locator("#global-error")).to_be_empty()
+
+
+def test_manual_refresh_announces_progress_without_poll_announcements(page):
+    announcement = page.locator("#refresh-announcement")
+    hold(page, "workers")
+    page.locator("#refresh").click()
+    request_id = pending(page, "workers")
+    expect(announcement).to_have_text("Refreshing dashboard…")
+    finish(page, request_id)
+    expect(announcement).to_have_text("Dashboard updated.")
+    page.evaluate("window.monitoringTest.tick()")
+    expect(page.locator("#live-text")).to_contain_text("Updated")
+    expect(announcement).to_have_text("Dashboard updated.")
+
+
+def test_missing_library_replaces_initial_loading_message(browser):
+    page = browser.new_page()
+    page.route("**/*", lambda route: route.abort())
+    page.set_content(HTML)
+    page.add_script_tag(content=APP)
+    expect(page.locator("#global-error")).to_have_text("Supabase browser library did not load.")
+    expect(page.locator("#overview-view")).to_contain_text("Unable to load overview. Reload the page to retry.")
+    page.close()
+
+
+def test_refresh_preserves_place_focus_and_dialog_context(page):
+    show(page, "places")
+    place = page.get_by_role("button", name="Place 000", exact=True)
+    expect(place).to_be_visible()
+    place.focus()
+    hold(page, "places")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "places"))
+    expect(place).to_be_focused()
+
+    place.press("Enter")
+    dialog = page.get_by_role("dialog", name=re.compile("Place 000"))
+    history = dialog.get_by_role("region", name="Attempt history table")
+    summary = history.locator("tbody tr").first.locator("summary")
+    summary.click()
+    expect(summary).to_be_focused()
+    expect(summary.locator("..")).to_have_attribute("open", "")
+    hold(page, "attempts")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "attempts"))
+    expect(summary).to_be_focused()
+    expect(summary.locator("..")).to_have_attribute("open", "")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(place).to_be_focused()
+    page.evaluate("window.monitoringTest.state.places = []")
+    hold(page, "places")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "places"))
+    expect(page.get_by_role("region", name="Places table")).to_be_focused()
+
+
+def test_refresh_preserves_expanded_log_details_and_focus(page):
+    show(page, "logs")
+    table = page.get_by_role("region", name="Operational logs table")
+    summary = table.locator("tbody tr").first.locator("summary")
+    summary.click()
+    expect(summary).to_be_focused()
+    hold(page, "logs")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "logs"))
+    expect(summary).to_be_focused()
+    expect(summary.locator("..")).to_have_attribute("open", "")
+
+
+def test_long_content_and_large_text_do_not_overflow(page):
+    page.set_viewport_size({"width": 360, "height": 900})
+    page.evaluate("""() => {
+      document.documentElement.style.fontSize = '200%';
+      const state = window.monitoringTest.state;
+      state.workers[0].display_name = 'Worker-' + 'W'.repeat(200);
+      state.workers[0].current_state.pause_reason = 'Reason-' + 'R'.repeat(200);
+      state.places[0].source_record.name = 'Place-' + 'P'.repeat(200);
+    }""")
+    page.locator("#refresh").click()
+    expect(page.locator(".worker-name").first).to_contain_text("Worker-")
+    for view in ("overview", "places", "logs"):
+        show(page, view)
+        expect(page.locator(f"#{view}-view")).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), view
+    show(page, "places")
+    page.get_by_role("button", name="Place-" + "P" * 200, exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
+    assert dialog.evaluate("node => node.scrollWidth <= node.clientWidth")
+
+
 def test_mobile_tables_and_place_dialog_are_accessible(page):
     page.set_viewport_size({"width": 375, "height": 900})
     show(page, "places")
     region = page.get_by_role("region", name="Places table")
     expect(region).to_have_attribute("tabindex", "0")
+    expect(region.locator(".table-scroll-hint")).to_be_visible()
+    expect(region.locator(".pill").first).to_have_css("white-space", "nowrap")
+    place_box = page.get_by_role("button", name="Place 000", exact=True).bounding_box()
+    assert place_box["width"] >= 44 and place_box["height"] >= 44
     assert region.evaluate("node => node.scrollWidth > node.clientWidth")
     region.focus()
     page.keyboard.press("ArrowRight")
@@ -495,6 +756,8 @@ def test_mobile_tables_and_place_dialog_are_accessible(page):
     page.locator("#detail-close").click()
     show(page, "logs")
     expect(page.get_by_role("region", name="Operational logs table")).to_have_attribute("tabindex", "0")
+    detail_box = page.locator("#logs-table summary").first.bounding_box()
+    assert detail_box["width"] >= 44 and detail_box["height"] >= 44
 
 
 @pytest.mark.parametrize(("theme", "width"), [("light", 1440), ("dark", 375)])
@@ -570,8 +833,11 @@ def test_current_error_is_reported_and_next_success_clears_it(page):
     page.locator("#place-search").click()
     finish(page, pending(page, "places"), "Current search failed")
     expect(page.locator("#global-error")).to_have_text("Current search failed")
+    expect(page.locator("#stale-note")).to_contain_text("may be out of date")
+    expect(page.locator("#stale-note")).to_be_visible()
     page.locator("#place-search").click()
     expect(page.locator("#global-error")).to_be_empty()
+    expect(page.locator("#stale-note")).to_be_hidden()
 
 
 def test_old_success_cannot_clear_newer_error(page):
@@ -733,8 +999,18 @@ def test_current_detail_error_is_visible_inside_dialog(page):
     page.get_by_role("button", name="Place 000", exact=True).click()
     finish(page, pending(page, "attempts"), "Attempt history unavailable")
     expect(page.locator("#detail-error")).to_have_text("Attempt history unavailable")
-    expect(page.locator("#detail-content")).to_contain_text("Close and reopen to retry")
+    expect(page.locator("#detail-content")).to_contain_text("Try again")
     expect(page.locator("#attempts-page")).to_have_text("Unavailable")
+    hold(page, "attempts")
+    page.get_by_role("button", name="Retry loading details").click()
+    request_id = pending(page, "attempts")
+    expect(page.get_by_role("button", name="Retry loading details")).to_be_disabled()
+    expect(page.locator("#attempts-table")).to_have_attribute("aria-busy", "true")
+    finish(page, request_id)
+    expect(page.locator("#detail-error")).to_be_empty()
+    expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 3")
+    expect(page.get_by_role("button", name="Retry loading details")).to_be_hidden()
+    expect(page.locator("#detail-close")).to_be_focused()
 
 
 def test_polling_and_visibility_do_not_apply_stale_results(page):

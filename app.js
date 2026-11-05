@@ -10,12 +10,16 @@
   let activeView = "overview";
   let placesOffset = 0;
   let placesTotal = 0;
+  let placeFilters = { query: "", outcome: "", queueStatus: "", review: null };
   let logsOffset = 0;
   let logsTotal = 0;
+  let logFilters = { severity: "", from: "", to: "" };
   let detailPlace = null;
+  let detailOpenerKey = null;
   let attemptsOffset = 0;
   let attemptsTotal = 0;
   let pollTimer = null;
+  let manualRefresh = 0;
   // Ignore responses that belong to an older refresh or interaction.
   let workersRequest = 0;
   let viewRequest = 0;
@@ -54,12 +58,15 @@
   function setError(message = "") {
     globalError.classList.remove("warning");
     globalError.textContent = message;
+    const hasData = document.getElementById(`${activeView}-view`).querySelector(".summary-grid, .table-wrap");
+    document.getElementById("stale-note").hidden = !message || !hasData;
     setLive(message ? "bad" : "ok", message ? "Update failed" : `Updated ${new Date().toLocaleTimeString()}`);
   }
 
   function setWarning(message) {
     globalError.classList.add("warning");
     globalError.textContent = message;
+    document.getElementById("stale-note").hidden = true;
     setLive("warning", "Partial update");
   }
 
@@ -85,15 +92,21 @@
     return result.data;
   }
 
-  function makeTable(headers, rows, label) {
+  function makeTable(headers, rows, label, emptyMessage = "No records found.") {
     const wrapper = el("div", "table-wrap");
     wrapper.tabIndex = 0;
     wrapper.setAttribute("role", "region");
     wrapper.setAttribute("aria-label", label);
+    const scrollHint = el("p", "table-scroll-hint", "Scroll sideways to see all columns.");
+    scrollHint.setAttribute("aria-hidden", "true");
     const table = el("table");
     const thead = el("thead");
     const headRow = el("tr");
-    headers.forEach((header) => headRow.append(el("th", "", header)));
+    headers.forEach((header) => {
+      const cell = el("th", "", header);
+      cell.scope = "col";
+      headRow.append(cell);
+    });
     thead.append(headRow);
     const tbody = el("tbody");
     rows.forEach((cells) => {
@@ -108,15 +121,37 @@
       tbody.append(row);
     });
     table.append(thead, tbody);
-    wrapper.append(table);
-    if (!rows.length) wrapper.append(el("p", "empty", "No records found."));
+    wrapper.append(scrollHint, table);
+    if (!rows.length) wrapper.append(el("p", "empty", emptyMessage));
     return wrapper;
+  }
+
+  function replaceTable(container, replacement) {
+    const previous = container.querySelector(".table-wrap");
+    const scrollLeft = previous?.scrollLeft || 0;
+    const focused = previous?.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = focused && focused !== previous ? focused.dataset.focusKey : null;
+    const openKeys = new Set(Array.from(previous?.querySelectorAll("details[open][data-detail-key]") || [],
+      (detail) => detail.dataset.detailKey));
+    replacement.querySelectorAll("details[data-detail-key]").forEach((detail) => {
+      detail.open = openKeys.has(detail.dataset.detailKey);
+    });
+    container.replaceChildren(replacement);
+    replacement.scrollLeft = scrollLeft;
+    if (focused) {
+      const target = focusKey && Array.from(replacement.querySelectorAll("[data-focus-key]"))
+        .find((element) => element.dataset.focusKey === focusKey);
+      (target || replacement).focus({ preventScroll: true });
+      replacement.scrollLeft = scrollLeft;
+    }
   }
 
   function setPager(prefix, offset, total, onPrevious, onNext) {
     const page = Math.floor(offset / PAGE_SIZE) + 1;
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    document.getElementById(`${prefix}-page`).textContent = `Page ${page} of ${pages} · ${formatCount(total)} rows`;
+    const pageLabel = document.getElementById(`${prefix}-page`);
+    const description = `Page ${page} of ${pages} · ${formatCount(total)} rows`;
+    if (pageLabel.textContent !== description) pageLabel.textContent = description;
     const previous = document.getElementById(`${prefix}-prev`);
     const next = document.getElementById(`${prefix}-next`);
     previous.disabled = offset <= 0;
@@ -129,28 +164,33 @@
     return worker.display_name || worker.worker_id;
   }
 
+  function syncWorkerPicker(picker) {
+    if (picker.value !== activeWorker) picker.value = activeWorker;
+    const title = picker.selectedOptions[0]?.textContent || "All workers";
+    if (picker.title !== title) picker.title = title;
+  }
+
   function populateWorkers() {
     const active = document.getElementById("active-worker");
     const logWorker = document.getElementById("log-worker");
-    active.replaceChildren();
-    logWorker.replaceChildren();
-    const all = el("option", "", "All workers");
-    all.value = "";
-    active.append(all);
-    const logAll = el("option", "", "All workers");
-    logAll.value = "";
-    logWorker.append(logAll);
-    workers.forEach((worker) => {
-      const label = `${workerLabel(worker)} · ${worker.worker_id.slice(0, 8)}`;
-      const option = el("option", "", label);
-      option.value = worker.worker_id;
-      active.append(option);
-      const logOption = el("option", "", label);
-      logOption.value = worker.worker_id;
-      logWorker.append(logOption);
+    const options = [{ value: "", label: "All workers" }, ...workers.map((worker) => ({
+      value: worker.worker_id,
+      label: `${workerLabel(worker)} · ${worker.worker_id.slice(0, 8)}`,
+    }))];
+    [active, logWorker].forEach((picker) => {
+      const unchanged = picker.options.length === options.length && options.every((option, index) =>
+        picker.options[index].value === option.value && picker.options[index].textContent === option.label);
+      if (!unchanged) {
+        const fragment = document.createDocumentFragment();
+        options.forEach(({ value, label }) => {
+          const option = el("option", "", label);
+          option.value = value;
+          fragment.append(option);
+        });
+        picker.replaceChildren(fragment);
+      }
+      syncWorkerPicker(picker);
     });
-    active.value = activeWorker;
-    logWorker.value = activeWorker;
   }
 
   function setActiveWorker(workerId) {
@@ -161,8 +201,8 @@
       viewRequest += 1;
       detailRequest += 1;
     }
-    document.getElementById("active-worker").value = activeWorker;
-    document.getElementById("log-worker").value = activeWorker;
+    syncWorkerPicker(document.getElementById("active-worker"));
+    syncWorkerPicker(document.getElementById("log-worker"));
   }
 
   async function countAttempts(workerId, windowStart, windowEnd, filter) {
@@ -441,16 +481,59 @@
     return value === "" ? null : value === "true";
   }
 
+  function applyPlaceFilters() {
+    placeFilters = {
+      query: document.getElementById("place-query").value.trim(),
+      outcome: document.getElementById("place-outcome").value,
+      queueStatus: document.getElementById("place-status").value,
+      review: selectedReview(),
+    };
+    placesOffset = 0;
+    refreshCurrent();
+  }
+
+  function setLogDateError(message) {
+    const error = document.getElementById("log-date-error");
+    error.textContent = message;
+    error.hidden = !message;
+    ["log-from", "log-to"].forEach((id) => {
+      const field = document.getElementById(id);
+      if (message) field.setAttribute("aria-invalid", "true");
+      else field.removeAttribute("aria-invalid");
+    });
+  }
+
+  function applyLogFilters() {
+    const from = document.getElementById("log-from").value;
+    const to = document.getElementById("log-to").value;
+    const fromTime = from ? new Date(from).getTime() : null;
+    const toTime = to ? new Date(to).getTime() : null;
+    if ((from && !Number.isFinite(fromTime)) || (to && !Number.isFinite(toTime))) {
+      setLogDateError("Enter valid start and end dates.");
+      return;
+    }
+    if (fromTime !== null && toTime !== null && fromTime > toTime) {
+      setLogDateError("From must be on or before To.");
+      return;
+    }
+    setLogDateError("");
+    logFilters = {
+      severity: document.getElementById("log-severity").value,
+      from: fromTime === null ? "" : new Date(fromTime).toISOString(),
+      to: toTime === null ? "" : new Date(toTime).toISOString(),
+    };
+    logsOffset = 0;
+    refreshCurrent();
+  }
+
   async function renderPlaces(isCurrent) {
-    const query = document.getElementById("place-query").value.trim();
-    const outcome = document.getElementById("place-outcome").value;
-    const queueStatus = document.getElementById("place-status").value;
+    const { query, outcome, queueStatus, review } = placeFilters;
     const params = {
       p_query: query,
       p_outcome: outcome,
       p_queue_status: queueStatus,
       p_worker_id: activeWorker || null,
-      p_review_flag: selectedReview(),
+      p_review_flag: review,
       p_limit: PAGE_SIZE,
     };
     let offset = placesOffset;
@@ -469,11 +552,16 @@
       const name = place.source_record?.name || "(unnamed)";
       const button = el("button", "link", name);
       button.type = "button";
+      button.dataset.focusKey = JSON.stringify([place.worker_id, place.osm_id]);
       button.addEventListener("click", () => openDetail(place));
       return [button, place.worker_id.slice(0, 8), place.osm_id, pill(place.outcome), pill(place.queue_status), place.review_flag ? pill("warning", "needs review") : "—", place.latest_error_code || "—"];
     });
-    document.getElementById("places-table").replaceChildren(makeTable(
-      ["Name", "Worker", "OSM ID", "Outcome", "Queue", "Review", "Latest error"], rows, "Places table",
+    const filtered = query || outcome || queueStatus || review !== null || activeWorker;
+    const emptyMessage = filtered
+      ? "No places match the current filters. Adjust the filters or worker selection and try again."
+      : "No places have been reported yet.";
+    replaceTable(document.getElementById("places-table"), makeTable(
+      ["Name", "Worker", "OSM ID", "Outcome", "Queue", "Review", "Latest error"], rows, "Places table", emptyMessage,
     ));
     setPager("places", offset, placesTotal,
       () => { placesOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
@@ -483,10 +571,16 @@
   function openDetail(place) {
     detailRequest += 1;
     detailPlace = place;
+    detailOpenerKey = JSON.stringify([place.worker_id, place.osm_id]);
     attemptsOffset = 0;
     document.getElementById("detail-title").textContent = `${place.source_record?.name || "Place"} · ${place.osm_id}`;
     document.getElementById("detail-error").textContent = "";
-    document.getElementById("detail-content").replaceChildren(el("p", "muted detail-loading", "Loading place details…"));
+    const retry = document.getElementById("detail-retry");
+    retry.hidden = true;
+    retry.disabled = false;
+    const loading = el("p", "muted detail-loading", "Loading place details…");
+    loading.setAttribute("role", "status");
+    document.getElementById("detail-content").replaceChildren(loading);
     document.getElementById("attempts-table").replaceChildren();
     document.getElementById("attempts-page").textContent = "Loading…";
     document.getElementById("attempts-prev").disabled = true;
@@ -509,6 +603,11 @@
     const dialog = document.getElementById("place-dialog");
     if (!detailPlace || !dialog.open || document.hidden) return false;
     const request = ++detailRequest;
+    const attemptContainer = document.getElementById("attempts-table");
+    const retry = document.getElementById("detail-retry");
+    const retryHadFocus = document.activeElement === retry;
+    if (!retry.hidden) retry.disabled = true;
+    attemptContainer.setAttribute("aria-busy", "true");
     const status = options.status ?? ++statusRequest;
     const originalPlace = detailPlace;
     const isCurrent = () => request === detailRequest && !document.hidden && dialog.open &&
@@ -566,9 +665,15 @@
       attemptsOffset = offset;
       attemptsTotal = Number(result.count || 0);
       document.getElementById("detail-error").textContent = "";
+      if (retryHadFocus && (document.activeElement === retry || document.activeElement === dialog ||
+          !dialog.contains(document.activeElement))) {
+        document.getElementById("detail-close").focus({ preventScroll: true });
+      }
+      retry.hidden = true;
       document.getElementById("detail-content").replaceChildren(content);
-      document.getElementById("attempts-table").replaceChildren(makeTable(
-        ["Completed", "Duration", "Status", "Outcome", "Match", "Latest error", "Evidence"], rows, "Attempt history table",
+      replaceTable(document.getElementById("attempts-table"), makeTable(
+        ["Completed", "Duration", "Status", "Outcome", "Match", "Latest error", "Evidence"], rows,
+        "Attempt history table", "No attempts have been reported for this place yet.",
       ));
       setPager("attempts", offset, attemptsTotal,
         () => { attemptsOffset = Math.max(0, offset - PAGE_SIZE); refreshDetail(); },
@@ -579,20 +684,30 @@
       if (isCurrent()) {
         const message = error?.message || "Unable to load place details.";
         document.getElementById("detail-error").textContent = message;
+        retry.hidden = false;
         const loading = document.querySelector("#detail-content .detail-loading");
         if (loading) {
-          loading.textContent = "Unable to load place details. Close and reopen to retry.";
+          loading.textContent = "Unable to load place details. Try again.";
           document.getElementById("attempts-page").textContent = "Unavailable";
         }
         if (status === statusRequest) setError(message);
       }
       return false;
+    } finally {
+      if (request === detailRequest) {
+        attemptContainer.removeAttribute("aria-busy");
+        retry.disabled = false;
+      }
     }
   }
 
   function makeDisclosure(attempt) {
     const details = el("details");
-    details.append(el("summary", "", "View"));
+    details.dataset.detailKey = attempt.attempt_id;
+    const summary = el("summary", "", "View");
+    summary.dataset.focusKey = attempt.attempt_id;
+    summary.setAttribute("aria-label", `View evidence for attempt completed ${formatDate(attempt.worker_completed_at)}`);
+    details.append(summary);
     const pre = el("pre");
     pre.textContent = JSON.stringify({
       started_at: attempt.worker_started_at,
@@ -607,11 +722,7 @@
 
   async function renderLogs(isCurrent) {
     const workerId = document.getElementById("log-worker").value;
-    const severity = document.getElementById("log-severity").value;
-    const from = document.getElementById("log-from").value;
-    const to = document.getElementById("log-to").value;
-    const fromTime = from ? new Date(from).toISOString() : null;
-    const toTime = to ? new Date(to).toISOString() : null;
+    const { severity, from: fromTime, to: toTime } = logFilters;
     const fetchPage = (offset) => {
       let query = client.from("monitoring_operational_events")
         .select("event_id,worker_id,run_id,attempt_id,worker_sequence,event_type,severity,data,worker_occurred_at,received_at", { count: "exact" })
@@ -639,21 +750,29 @@
     const rows = events.map((event) => [
       formatDate(event.received_at), pill(event.severity), event.event_type,
       event.worker_id.slice(0, 8), event.run_id || "—",
-      { node: jsonDisclosure(event.data), className: "wrap" },
+      { node: jsonDisclosure(event), className: "wrap" },
     ]);
-    document.getElementById("logs-table").replaceChildren(makeTable(
-      ["Received", "Severity", "Event", "Worker", "Run", "Details"], rows, "Operational logs table",
+    const filtered = workerId || severity || fromTime || toTime;
+    const emptyMessage = filtered
+      ? "No events match the current filters. Adjust the filters or worker selection and try again."
+      : "No operational events have been received yet.";
+    replaceTable(document.getElementById("logs-table"), makeTable(
+      ["Received", "Severity", "Event", "Worker", "Run", "Details"], rows, "Operational logs table", emptyMessage,
     ));
     setPager("logs", offset, logsTotal,
       () => { logsOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
       () => { logsOffset = offset + PAGE_SIZE; refreshCurrent(); });
   }
 
-  function jsonDisclosure(value) {
+  function jsonDisclosure(event) {
     const details = el("details");
-    details.append(el("summary", "", "View"));
+    details.dataset.detailKey = event.event_id;
+    const summary = el("summary", "", "View");
+    summary.dataset.focusKey = event.event_id;
+    summary.setAttribute("aria-label", `View details for ${event.event_type} received ${formatDate(event.received_at)}`);
+    details.append(summary);
     const pre = el("pre");
-    pre.textContent = JSON.stringify(value ?? {}, null, 2);
+    pre.textContent = JSON.stringify(event.data ?? {}, null, 2);
     details.append(pre);
     return details;
   }
@@ -662,6 +781,11 @@
     const request = ++viewRequest;
     if (document.hidden || !client) return;
     const view = activeView;
+    const section = document.getElementById(`${view}-view`);
+    section.setAttribute("aria-busy", "true");
+    const placeholder = section.querySelector(".view-placeholder");
+    if (placeholder) placeholder.textContent = `Loading ${view}…`;
+    setLive("", "Updating…");
     const status = ++statusRequest;
     const isCurrent = () => request === viewRequest && !document.hidden && activeView === view;
     try {
@@ -681,7 +805,12 @@
         else setError("");
       }
     } catch (error) {
-      if (isCurrent() && status === statusRequest) setError(error?.message || "Unable to load monitoring data.");
+      if (isCurrent() && status === statusRequest) {
+        if (placeholder) placeholder.textContent = `Unable to load ${view}. Select Refresh now to try again.`;
+        setError(error?.message || "Unable to load monitoring data.");
+      }
+    } finally {
+      if (request === viewRequest) section.removeAttribute("aria-busy");
     }
   }
 
@@ -701,10 +830,15 @@
     if (document.hidden || !client) return;
     const status = ++statusRequest;
     const isCurrent = () => request === workersRequest && !document.hidden;
+    setLive("", "Updating…");
     try {
       if (await refreshWorkers(isCurrent)) await refreshCurrent();
     } catch (error) {
-      if (isCurrent() && status === statusRequest) setError(error?.message || "Unable to refresh data.");
+      if (isCurrent() && status === statusRequest) {
+        const placeholder = document.querySelector(`#${activeView}-view .view-placeholder`);
+        if (placeholder) placeholder.textContent = `Unable to load ${activeView}. Select Refresh now to try again.`;
+        setError(error?.message || "Unable to refresh data.");
+      }
     }
   }
 
@@ -724,6 +858,7 @@
   }
 
   function switchView(view) {
+    document.getElementById(`${activeView}-view`).removeAttribute("aria-busy");
     activeView = view;
     detailRequest += 1;
     document.querySelectorAll(".tab").forEach((button) => {
@@ -735,12 +870,20 @@
     refreshCurrent();
   }
 
-  document.getElementById("refresh").addEventListener("click", (event) => {
+  document.getElementById("refresh").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.classList.remove("spin");
     void button.offsetWidth;
     button.classList.add("spin");
-    refreshAll();
+    if (!client || document.hidden) return;
+    const request = ++manualRefresh;
+    const announcement = document.getElementById("refresh-announcement");
+    announcement.textContent = "Refreshing dashboard…";
+    await refreshAll();
+    if (request !== manualRefresh || document.hidden) return;
+    const live = document.getElementById("live-status");
+    announcement.textContent = live.classList.contains("ok") ? "Dashboard updated."
+      : live.classList.contains("warning") ? "Dashboard updated with some metrics unavailable." : "";
   });
   const themeToggle = document.getElementById("theme-toggle");
   const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -773,9 +916,26 @@
     refreshCurrent();
   });
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-  document.getElementById("place-search").addEventListener("click", () => { placesOffset = 0; refreshCurrent(); });
-  document.getElementById("place-query").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { placesOffset = 0; refreshCurrent(); }
+  document.getElementById("places-filters").addEventListener("submit", (event) => {
+    event.preventDefault();
+    applyPlaceFilters();
+  });
+  document.getElementById("place-reset").addEventListener("click", () => {
+    ["place-query", "place-outcome", "place-status", "place-review"].forEach((id) => {
+      document.getElementById(id).value = "";
+    });
+    applyPlaceFilters();
+  });
+  document.getElementById("logs-filters").addEventListener("submit", (event) => {
+    event.preventDefault();
+    applyLogFilters();
+  });
+  document.getElementById("log-reset").addEventListener("click", () => {
+    ["log-severity", "log-from", "log-to"].forEach((id) => { document.getElementById(id).value = ""; });
+    applyLogFilters();
+  });
+  ["log-from", "log-to"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", () => setLogDateError(""));
   });
   document.getElementById("place-dialog").addEventListener("click", (event) => {
     if (event.target === event.currentTarget) event.currentTarget.close();
@@ -784,10 +944,15 @@
     if (!event.currentTarget.open) {
       detailRequest += 1;
       detailPlace = null;
+      document.getElementById("attempts-table").removeAttribute("aria-busy");
+      const opener = detailOpenerKey && Array.from(document.querySelectorAll("#places-table [data-focus-key]"))
+        .find((element) => element.dataset.focusKey === detailOpenerKey);
+      detailOpenerKey = null;
+      if (activeView === "places") (opener || document.getElementById("place-search")).focus({ preventScroll: true });
     }
   });
   document.getElementById("detail-close").addEventListener("click", () => document.getElementById("place-dialog").close());
-  document.getElementById("log-search").addEventListener("click", () => { logsOffset = 0; refreshCurrent(); });
+  document.getElementById("detail-retry").addEventListener("click", () => refreshDetail());
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopPolling();
@@ -795,6 +960,8 @@
       viewRequest += 1;
       detailRequest += 1;
       statusRequest += 1;
+      document.querySelectorAll(".view[aria-busy]").forEach((section) => section.removeAttribute("aria-busy"));
+      document.getElementById("attempts-table").removeAttribute("aria-busy");
     }
     else if (client) {
       refreshAll();
@@ -803,10 +970,12 @@
   });
 
   if (!window.supabase?.createClient) {
+    document.querySelector("#overview-view .view-placeholder").textContent = "Unable to load overview. Reload the page to retry.";
     setError("Supabase browser library did not load.");
     return;
   }
   if (!config.supabaseUrl || !config.supabasePublishableKey) {
+    document.querySelector("#overview-view .view-placeholder").textContent = "Unable to load overview. Check the dashboard configuration and reload.";
     setError("Copy config.example.js to config.js and add the Supabase URL and publishable key.");
     return;
   }
