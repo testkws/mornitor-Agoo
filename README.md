@@ -26,10 +26,11 @@ configured. Anyone with the URL can read worker IDs, place evidence, and logs,
 so keep sensitive data out of event payloads. Worker credentials and ingestion
 stay closed to `anon`.
 
-The UI uses deep teal (`#003135` and `#024950`), rust (`#964734`), turquoise
-(`#0FA4AF`), and pale blue (`#AFDDE5`). It follows the system light/dark
-preference and has a manual theme toggle that remembers your choice. Warning
-and error colors remain distinct for operational status.
+The UI uses warm earth tones: deep brown (`#3E362E`), brown (`#865D36`),
+taupe (`#93785B`), clay (`#AC8968`), and stone (`#A69080`), with muted
+fern-green and sky-blue accents. It follows the system light/dark preference
+and has a manual theme toggle that remembers your choice. Warning and error
+colors remain distinct for operational status.
 
 The worker selector applies across all sections. On Places and Logs, select
 **Apply filters** to use edited filters; **Reset filters** clears the filters in

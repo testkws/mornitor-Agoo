@@ -383,15 +383,15 @@ def test_manual_theme_choice_survives_reload(browser):
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to dark theme")
     expect(page.locator("#theme-icon-moon")).to_be_visible()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(242, 249, 250)")
-    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(86, 137, 142)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(220, 193, 169)")
+    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(123, 100, 83)")
     assert page.evaluate("document.documentElement.dataset.theme") == "light"
 
     page.evaluate("localStorage.setItem('theme', 'system')")
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to light theme")
     page.locator("#theme-toggle").click()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(242, 249, 250)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(220, 193, 169)")
     assert page.evaluate("localStorage.getItem('theme')") == "light"
     page.close()
 
@@ -402,10 +402,10 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
         linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
         return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
 
-    pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--surface-2"),
+    pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--bg"), ("--muted", "--surface-2"),
              ("--accent", "--bg"), ("--accent", "--surface"), ("--accent", "--accent-soft"),
              ("--ok", "--ok-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"),
-             ("--info", "--info-soft"), ("--brand-deep", "--brand-aqua"),
+             ("--info", "--info-soft"), ("--selected-ink", "--selected-bg"),
              ("--accent-ink", "--action"), ("--accent-ink", "--action-hover")]
     for theme in ("light", "dark"):
         page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
@@ -413,12 +413,12 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
           const styles = getComputedStyle(document.documentElement);
           return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
             '--ok', '--ok-soft', '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft',
-            '--brand-deep', '--brand-teal', '--brand-rust', '--brand-aqua', '--brand-mist', '--chart-fill', '--chart-other',
-            '--control-line', '--accent-ink', '--action', '--action-hover']
+            '--brand-deep', '--brand-brown', '--brand-taupe', '--brand-clay', '--brand-stone', '--chart-fill', '--chart-other',
+            '--control-line', '--accent-ink', '--action', '--action-hover', '--selected-ink', '--selected-bg']
             .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
         }""")
-        assert [colors[name] for name in ("--brand-deep", "--brand-teal", "--brand-rust", "--brand-aqua", "--brand-mist")] == [
-            "#003135", "#024950", "#964734", "#0fa4af", "#afdde5"]
+        assert [colors[name] for name in ("--brand-deep", "--brand-brown", "--brand-taupe", "--brand-clay", "--brand-stone")] == [
+            "#3e362e", "#865d36", "#93785b", "#ac8968", "#a69080"]
         for foreground, background in pairs:
             low, high = sorted((luminance(colors[foreground]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 4.5, (theme, foreground, background)
@@ -427,6 +427,8 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
             assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--chart-fill", background)
         low, high = sorted((luminance(colors["--accent"]), luminance(colors["--chart-other"])))
         assert (high + 0.05) / (low + 0.05) >= 3, (theme, "chart segments")
+        low, high = sorted((luminance(colors["--brand-deep"]), luminance(colors["--brand-clay"])))
+        assert (high + 0.05) / (low + 0.05) >= 3, (theme, "logo")
         for background in ("--bg", "--surface", "--surface-2", "--accent-soft"):
             low, high = sorted((luminance(colors["--control-line"]), luminance(colors[background])))
             assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--control-line", background)
@@ -442,13 +444,13 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
       navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
     })""")
     assert rendered == {
-        "background": "rgb(242, 249, 250)",
-        "logo": "rgb(15, 164, 175)",
-        "card": "rgb(255, 255, 255)",
-        "cardBorder": "rgb(175, 221, 229)",
-        "action": "rgb(2, 73, 80)",
-        "avatar": "rgb(225, 243, 244)",
-        "navigation": "rgb(8, 123, 131)",
+        "background": "rgb(220, 193, 169)",
+        "logo": "rgb(172, 137, 104)",
+        "card": "rgb(246, 235, 224)",
+        "cardBorder": "rgb(198, 173, 153)",
+        "action": "rgb(117, 75, 43)",
+        "avatar": "rgb(234, 214, 196)",
+        "navigation": "rgb(134, 93, 54)",
     }
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     dark_rendered = page.evaluate("""() => ({
@@ -459,25 +461,25 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
       navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
     })""")
     assert dark_rendered == {
-        "background": "rgb(0, 49, 53)",
-        "card": "rgb(2, 73, 80)",
-        "action": "rgb(15, 164, 175)",
-        "actionText": "rgb(0, 49, 53)",
-        "navigation": "rgb(84, 203, 208)",
+        "background": "rgb(41, 35, 31)",
+        "card": "rgb(62, 54, 46)",
+        "action": "rgb(213, 175, 144)",
+        "actionText": "rgb(62, 54, 46)",
+        "navigation": "rgb(211, 171, 136)",
     }
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     show(page, "places")
     for selector in ("#active-worker", "#refresh", "#theme-toggle", "#place-query", "#place-outcome", "#places-next"):
-        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(86, 137, 142)")
+        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(123, 100, 83)")
     page.locator("#place-search").hover()
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(0, 49, 53)")
-    expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(62, 54, 46)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 249, 241)")
 
     page.emulate_media(color_scheme="dark")
     page.evaluate("delete document.documentElement.dataset.theme")
     system_dark = page.evaluate("getComputedStyle(document.body).backgroundColor")
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(175, 221, 229)")
-    expect(page.locator("#place-search")).to_have_css("color", "rgb(0, 49, 53)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(242, 223, 203)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(62, 54, 46)")
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     assert page.evaluate("getComputedStyle(document.body).backgroundColor") == system_dark
     assert system_dark != rendered["background"]
@@ -516,10 +518,10 @@ def test_worker_picker_uses_theme_and_supports_keyboard(page, theme):
 
     if page.evaluate("CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))') && matchMedia('(hover: hover) and (pointer: fine)').matches"):
         assert picker.evaluate("node => node.matches(':open')")
-        expected_surface = "rgb(255, 255, 255)" if theme == "light" else "rgb(2, 73, 80)"
+        expected_surface = "rgb(246, 235, 224)" if theme == "light" else "rgb(62, 54, 46)"
         assert picker.evaluate("node => getComputedStyle(node, '::picker(select)').backgroundColor") == expected_surface
-        expect(picker.locator("option:checked")).to_have_css("background-color", "rgb(175, 221, 229)")
-        expect(picker.locator("option:checked")).to_have_css("color", "rgb(0, 49, 53)")
+        expect(picker.locator("option:checked")).to_have_css("background-color", "rgb(223, 194, 168)")
+        expect(picker.locator("option:checked")).to_have_css("color", "rgb(62, 54, 46)")
 
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
