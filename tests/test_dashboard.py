@@ -100,7 +100,7 @@ def seed_summary_data(page):
         row(state.workerB, -1000, 'found', 'checked')
       ];
       state.workers[0].last_heartbeat_at = new Date(now - 60000).toISOString();
-      state.workers[1].last_heartbeat_at = new Date(now - 400000).toISOString();
+      state.workers[1].last_heartbeat_at = new Date(now - 700000).toISOString();
     }""")
 
 
@@ -647,9 +647,9 @@ def test_place_loading_failure_is_visible_and_recoverable(page):
 
 def test_manual_refresh_announces_progress_without_poll_announcements(page):
     announcement = page.locator("#refresh-announcement")
-    hold(page, "workers")
+    hold(page, "overview")
     page.locator("#refresh").click()
-    request_id = pending(page, "workers")
+    request_id = pending(page, "overview")
     expect(announcement).to_have_text("Refreshing dashboard…")
     finish(page, request_id)
     expect(announcement).to_have_text("Dashboard updated.")
@@ -834,6 +834,7 @@ def test_current_error_is_reported_and_next_success_clears_it(page):
     finish(page, pending(page, "places"), "Current search failed")
     expect(page.locator("#global-error")).to_have_text("Current search failed")
     expect(page.locator("#stale-note")).to_contain_text("may be out of date")
+    expect(page.locator("#stale-note")).to_contain_text("Last updated")
     expect(page.locator("#stale-note")).to_be_visible()
     page.locator("#place-search").click()
     expect(page.locator("#global-error")).to_be_empty()
@@ -1041,3 +1042,195 @@ def test_polling_and_visibility_do_not_apply_stale_results(page):
     page.evaluate("window.monitoringTest.setHidden(false)")
     expect(page.get_by_role("button", name="Place 000", exact=True)).to_be_visible()
     assert page.evaluate("window.monitoringTest.timerCount()") == 1
+
+
+def test_overview_reuses_workers_and_polls_every_five_minutes(page):
+    assert page.evaluate("window.monitoringTest.timerDelays()") == [300_000]
+    initial = page.evaluate("window.monitoringTest.state.requests")
+    assert sum(request["kind"] == "overview" for request in initial) == 1
+    assert not any(request["kind"] == "workers" for request in initial)
+    assert len([request for request in initial if request["kind"].startswith("metric-")]) == 5
+    assert all(request["params"]["head"] for request in initial if request["kind"].startswith("metric-"))
+
+    page.evaluate("window.monitoringTest.tick()")
+    page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind === 'overview').length === 2")
+    page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).length === 10")
+    requests = page.evaluate("window.monitoringTest.state.requests")
+    assert not any(request["kind"] == "workers" for request in requests)
+    expect(page.locator(".nav-meta")).to_contain_text("5 MIN")
+
+
+def test_ten_minute_heartbeat_boundary(page):
+    page.evaluate("""() => {
+      const now = Date.now();
+      Date.now = () => now;
+      const workers = window.monitoringTest.state.workers;
+      workers[0].last_heartbeat_at = new Date(now - 599999).toISOString();
+      workers[1].last_heartbeat_at = new Date(now - 600000).toISOString();
+    }""")
+    page.locator("#refresh").click()
+    expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
+    expect(page.locator(".worker-panel").filter(has_text="Worker A")).to_contain_text("Heartbeat recent")
+    expect(page.locator(".worker-panel").filter(has_text="Worker B")).to_contain_text("Worker not reporting")
+    expect(page.locator(".worker-section-note")).to_contain_text("10 minutes")
+
+
+def test_place_list_uses_small_responses_and_preserves_search_behavior(page):
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      state.places.slice(0, 50).forEach(place => {
+        place.source_record.extra = 'source-'.repeat(500);
+        place.candidates = [{ evidence: 'candidate-'.repeat(500) }];
+        place.google_proposal = { evidence: 'proposal-'.repeat(500) };
+      });
+      state.places[0].source_record.name = 'Café (North)';
+    }""")
+    show(page, "places")
+    expect(page.get_by_role("button", name="Café (North)", exact=True)).to_be_visible()
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1)")
+    original_bytes = page.evaluate(
+        "new TextEncoder().encode(JSON.stringify(window.monitoringTest.state.places.slice(0, 50))).length"
+    )
+    assert request["params"]["via"] == "table"
+    assert "name:source_record->>name" in request["params"]["columns"]
+    assert "candidates" not in request["params"]["columns"]
+    assert "google_proposal" not in request["params"]["columns"]
+    assert request["bodyBytes"] < original_bytes / 10
+    assert not page.evaluate("window.monitoringTest.state.requests.some(r => r.kind === 'place-detail')")
+
+    page.locator("#place-query").fill("Café")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("Page 1 of 1")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1).params.via") == "table"
+    expect(page.get_by_role("button", name="Café (North)", exact=True)).to_be_visible()
+
+    page.locator("#place-query").fill("Café (North)")
+    page.locator("#place-search").click()
+    expect(page.get_by_role("button", name="Café (North)", exact=True)).to_be_visible()
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1).params.via") == "rpc"
+    page.locator("#place-query").fill("%")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("Page 1 of 3")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1).params.via") == "rpc"
+
+
+def test_place_details_load_on_open_and_retry(page):
+    page.evaluate("""() => {
+      const place = window.monitoringTest.state.places[0];
+      place.google_proposal = { name: 'Detailed proposal' };
+      place.candidates = [{ name: 'Detailed candidate' }];
+    }""")
+    show(page, "places")
+    assert not page.evaluate("window.monitoringTest.state.requests.some(r => r.kind === 'place-detail')")
+    hold(page, "place-detail")
+    page.get_by_role("button", name="Place 000", exact=True).click()
+    request_id = pending(page, "place-detail")
+    expect(page.locator("#detail-content")).to_contain_text("Loading place details")
+    finish(page, request_id, "Place details unavailable")
+    expect(page.locator("#detail-error")).to_have_text("Place details unavailable")
+    page.locator("#detail-retry").click()
+    expect(page.locator("#detail-content")).to_contain_text("Detailed proposal")
+    expect(page.locator("#detail-content")).to_contain_text("Detailed candidate")
+    expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 3")
+
+
+def test_log_details_are_lazy_retried_and_cached(page):
+    page.evaluate("""() => {
+      const logs = window.monitoringTest.state.logs;
+      logs.slice(0, 50).forEach(log => { log.data = {payload: 'data-'.repeat(1000)}; });
+      logs[0].data = {payload: 'log evidence ' + 'data-'.repeat(1000)};
+    }""")
+    show(page, "logs")
+    table = page.get_by_role("region", name="Operational logs table")
+    details = table.locator("tbody tr").first.locator("details")
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'logs').at(-1)")
+    assert "data" not in request["params"]["columns"].split(",")
+    original_bytes = page.evaluate(
+        "new TextEncoder().encode(JSON.stringify(window.monitoringTest.state.logs.slice(0, 50))).length"
+    )
+    assert request["bodyBytes"] < original_bytes / 10
+    assert not page.evaluate("window.monitoringTest.state.requests.some(r => r.kind === 'log-detail')")
+
+    hold(page, "log-detail")
+    details.locator("summary").click()
+    request_id = pending(page, "log-detail")
+    expect(details).to_contain_text("Loading details")
+    finish(page, request_id, "Log detail unavailable")
+    expect(details.get_by_role("alert")).to_have_text("Log detail unavailable")
+    details.get_by_role("button", name="Retry loading details").click()
+    expect(details.locator("summary")).to_be_focused()
+    expect(details.locator("pre")).to_contain_text("log evidence")
+    before = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'log-detail').length")
+    assert before == 2
+    hold(page, "logs")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "logs"))
+    expect(details).to_have_attribute("open", "")
+    expect(details.locator("pre")).to_contain_text("log evidence")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'log-detail').length") == before
+
+
+def test_attempt_evidence_is_lazy_and_cached(page):
+    page.evaluate("""() => {
+      const attempts = window.monitoringTest.state.attempts;
+      attempts.slice(0, 50).forEach(item => { item.candidates = [{ evidence: 'data-'.repeat(1000) }]; });
+      const attempt = attempts[0];
+      attempt.candidates = [{ name: 'candidate evidence' }];
+      attempt.proposal = { name: 'proposal evidence' };
+      attempt.errors = [{ message: 'error evidence' }];
+    }""")
+    show(page, "places")
+    page.get_by_role("button", name="Place 000", exact=True).click()
+    expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 3")
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'attempts').at(-1)")
+    assert not {"candidates", "proposal", "errors"} & set(request["params"]["columns"].split(","))
+    original_bytes = page.evaluate(
+        "new TextEncoder().encode(JSON.stringify(window.monitoringTest.state.attempts.slice(0, 50))).length"
+    )
+    assert request["bodyBytes"] < original_bytes / 10
+    assert not page.evaluate("window.monitoringTest.state.requests.some(r => r.kind === 'attempt-evidence')")
+    details = page.locator("#attempts-table tbody tr").first.locator("details")
+    details.locator("summary").click()
+    expect(details.locator("pre")).to_contain_text("candidate evidence")
+    expect(details.locator("pre")).to_contain_text("proposal evidence")
+    expect(details.locator("pre")).to_contain_text("error evidence")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'attempt-evidence').length") == 1
+    hold(page, "attempts")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "attempts"))
+    expect(details).to_have_attribute("open", "")
+    expect(details.locator("pre")).to_contain_text("candidate evidence")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'attempt-evidence').length") == 1
+
+
+def test_inflight_log_detail_is_shared_across_refresh(page):
+    page.evaluate("window.monitoringTest.state.logs[0].data = {payload: 'late evidence'}")
+    show(page, "logs")
+    details = page.locator("#logs-table tbody tr").first.locator("details")
+    hold(page, "log-detail")
+    details.locator("summary").click()
+    request_id = pending(page, "log-detail")
+    hold(page, "logs")
+    page.evaluate("window.monitoringTest.tick()")
+    finish(page, pending(page, "logs"))
+    expect(details).to_have_attribute("open", "")
+    finish(page, request_id)
+    expect(details.locator("pre")).to_contain_text("late evidence")
+    assert page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'log-detail').length") == 1
+
+
+def test_removed_selected_worker_refreshes_overview_for_all_workers(page):
+    worker_a = page.evaluate("window.monitoringTest.state.workerA")
+    page.locator("#active-worker").select_option(worker_a)
+    expect(page.locator(".worker-panel")).to_have_count(1)
+    hold(page, "overview")
+    page.locator("#refresh").click()
+    old_request = pending(page, "overview")
+    page.evaluate("window.monitoringTest.state.workers = window.monitoringTest.state.workers.slice(1)")
+    page.locator("#refresh").click()
+    expect(page.locator("#active-worker")).to_have_value("")
+    expect(page.locator(".worker-panel")).to_have_count(1)
+    expect(page.locator(".worker-panel")).to_contain_text("Worker B")
+    finish(page, old_request)
+    expect(page.locator(f'#active-worker option[value="{worker_a}"]')).to_have_count(0)
+    expect(page.locator(".worker-panel")).to_contain_text("Worker B")

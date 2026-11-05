@@ -2,8 +2,13 @@
   "use strict";
 
   const PAGE_SIZE = 50;
+  const POLL_INTERVAL = 5 * 60_000;
+  const HEARTBEAT_WINDOW = 10 * 60_000;
   const config = window.GOOGLE_MONITORING_CONFIG || {};
   const globalError = document.getElementById("global-error");
+  const eventDetails = new Map();
+  const attemptEvidence = new Map();
+  const detailLoads = new Map();
   let client = null;
   let workers = [];
   let activeWorker = "";
@@ -15,11 +20,13 @@
   let logsTotal = 0;
   let logFilters = { severity: "", from: "", to: "" };
   let detailPlace = null;
+  let detailPlaceLoaded = false;
   let detailOpenerKey = null;
   let attemptsOffset = 0;
   let attemptsTotal = 0;
   let pollTimer = null;
   let manualRefresh = 0;
+  let lastSuccessfulUpdate = null;
   // Ignore responses that belong to an older refresh or interaction.
   let workersRequest = 0;
   let viewRequest = 0;
@@ -59,8 +66,12 @@
     globalError.classList.remove("warning");
     globalError.textContent = message;
     const hasData = document.getElementById(`${activeView}-view`).querySelector(".summary-grid, .table-wrap");
-    document.getElementById("stale-note").hidden = !message || !hasData;
-    setLive(message ? "bad" : "ok", message ? "Update failed" : `Updated ${new Date().toLocaleTimeString()}`);
+    const staleNote = document.getElementById("stale-note");
+    if (!message) lastSuccessfulUpdate = new Date();
+    staleNote.textContent = `Some displayed information may be out of date.${lastSuccessfulUpdate
+      ? ` Last updated ${lastSuccessfulUpdate.toLocaleTimeString()}.` : ""} Use Refresh now to retry.`;
+    staleNote.hidden = !message || !hasData;
+    setLive(message ? "bad" : "ok", message ? "Update failed" : `Updated ${lastSuccessfulUpdate.toLocaleTimeString()}`);
   }
 
   function setWarning(message) {
@@ -361,20 +372,28 @@
   function heartbeatRecent(worker, now) {
     const received = worker.last_heartbeat_at ? new Date(worker.last_heartbeat_at).getTime() : NaN;
     const age = now - received;
-    return Number.isFinite(age) && age >= 0 && age < 180_000;
+    return Number.isFinite(age) && age >= 0 && age < HEARTBEAT_WINDOW;
   }
 
   async function renderOverview(isCurrent) {
     const container = document.getElementById("overview-view");
     const workerId = activeWorker;
-    const selectedWorkers = workers;
     const [result, attempts] = await Promise.all([
       client.rpc("monitoring_overview", { p_worker_id: workerId || null }),
       fetchAttemptSummary(workerId, isCurrent),
     ]);
     if (!isCurrent() || !attempts) return "";
     const data = resultOrThrow(result);
-    const chosenWorkers = workerId ? selectedWorkers.filter((worker) => worker.worker_id === workerId) : selectedWorkers;
+    if (!Array.isArray(data?.workers)) throw new Error("Worker data is unavailable.");
+    workers = data.workers;
+    if (workerId && !workers.some((worker) => worker.worker_id === workerId)) {
+      setActiveWorker("");
+      populateWorkers();
+      await refreshCurrent();
+      return "";
+    }
+    populateWorkers();
+    const chosenWorkers = workerId ? workers.filter((worker) => worker.worker_id === workerId) : workers;
     const now = Date.now();
     const reporting = chosenWorkers.filter((worker) => heartbeatRecent(worker, now)).length;
     const paused = chosenWorkers.filter((worker) => worker.current_state?.pause_reason).length;
@@ -421,7 +440,7 @@
     const workerHeading = el("div", "worker-section-heading");
     const workerIntro = el("div");
     workerIntro.append(el("p", "eyebrow", "Fleet activity"), el("h2", "worker-section-title", "Workers"));
-    workerHeading.append(workerIntro, el("p", "worker-section-note", "Heartbeat received within the last 3 minutes"));
+    workerHeading.append(workerIntro, el("p", "worker-section-note", "Heartbeat received within the last 10 minutes"));
     content.append(workerHeading);
 
     if (!chosenWorkers.length) content.append(el("p", "empty panel", "No scraper worker is provisioned yet."));
@@ -456,7 +475,7 @@
       stats.append(
         workerStat("Daily usage / limit", usage, day),
         workerStat("Last reported lookup", current, `Pending uploads: ${state.pending_upload_count == null ? "—" : formatCount(state.pending_upload_count)}`),
-        workerStat("Last heartbeat", formatDate(worker.last_heartbeat_at), recent ? "Received within 3 minutes" : "No recent heartbeat received"),
+        workerStat("Last heartbeat", formatDate(worker.last_heartbeat_at), recent ? "Received within 10 minutes" : "No recent heartbeat received"),
         workerStat("Last upload", formatDate(worker.last_upload_at), `Last seen ${formatDate(worker.last_seen_at)}`),
       );
       section.append(stats);
@@ -536,13 +555,36 @@
       p_review_flag: review,
       p_limit: PAGE_SIZE,
     };
+    // The RPC's SQL ILIKE accepts wildcards and PostgREST has its own filter
+    // grammar. Preserve the original search behavior for anything outside this
+    // conservative set of ordinary search characters.
+    const search = Array.from(query).slice(0, 200).join("");
+    const useRpc = !/^[\p{L}\p{M}\p{N}\s/-]*$/u.test(search);
+    const fetchPage = async (offset) => {
+      if (useRpc) return client.rpc("monitoring_places_page", { ...params, p_offset: offset });
+      let request = client.from("monitoring_place_results")
+        .select("worker_id,osm_id,name:source_record->>name,outcome,queue_status,review_flag,latest_error_code", { count: "exact" })
+        .order("osm_id", { ascending: true })
+        .order("worker_id", { ascending: true })
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (params.p_worker_id) request = request.eq("worker_id", params.p_worker_id);
+      if (outcome) request = request.eq("outcome", outcome);
+      if (queueStatus) request = request.eq("queue_status", queueStatus);
+      if (review !== null) request = request.eq("review_flag", review);
+      if (search) request = request.or(`osm_id.ilike.*${search}*,source_record->>name.ilike.*${search}*`);
+      const result = await request;
+      if (result.error) return result;
+      return { data: { total: result.count, rows: (result.data || []).map((place) => ({
+        ...place, source_record: { name: place.name },
+      })) }, error: null };
+    };
     let offset = placesOffset;
-    let result = await client.rpc("monitoring_places_page", { ...params, p_offset: offset });
+    let result = await fetchPage(offset);
     if (!isCurrent()) return;
     let data = resultOrThrow(result);
     if (offset > 0 && offset >= Number(data.total || 0)) {
       offset = 0;
-      result = await client.rpc("monitoring_places_page", { ...params, p_offset: offset });
+      result = await fetchPage(offset);
       if (!isCurrent()) return;
       data = resultOrThrow(result);
     }
@@ -571,6 +613,7 @@
   function openDetail(place) {
     detailRequest += 1;
     detailPlace = place;
+    detailPlaceLoaded = false;
     detailOpenerKey = JSON.stringify([place.worker_id, place.osm_id]);
     attemptsOffset = 0;
     document.getElementById("detail-title").textContent = `${place.source_record?.name || "Place"} · ${place.osm_id}`;
@@ -617,15 +660,19 @@
     let offset = attemptsOffset;
 
     try {
-      if (options.refreshPlace) {
-        const latest = await client.from("monitoring_place_results").select("*")
+      if (options.refreshPlace || !detailPlaceLoaded) {
+        const latest = await client.from("monitoring_place_results")
+          .select("worker_id,osm_id,source_record,google_proposal,candidates,matching_method,similarity,distance_m,review_flag,latest_error_code,latest_error_message")
           .eq("worker_id", place.worker_id).eq("osm_id", place.osm_id).maybeSingle();
         if (!isCurrent()) return false;
-        place = resultOrThrow(latest) || place;
+        place = resultOrThrow(latest);
+        if (!place) throw new Error("Place details are no longer available.");
+        detailPlace = place;
+        detailPlaceLoaded = true;
       }
 
       const fetchPage = (pageOffset) => client.from("monitoring_attempts")
-        .select("attempt_id,run_id,status,outcome,candidates,proposal,matching_method,similarity,distance_m,review_flag,errors,error_code,error_message,worker_started_at,worker_completed_at,received_at", { count: "exact" })
+        .select("attempt_id,status,outcome,matching_method,error_code,error_message,worker_started_at,worker_completed_at", { count: "exact" })
         .eq("worker_id", place.worker_id)
         .eq("osm_id", place.osm_id)
         .order("worker_completed_at", { ascending: false })
@@ -659,7 +706,7 @@
         formatDate(attempt.worker_completed_at), formatDuration(attempt.worker_started_at, attempt.worker_completed_at),
         pill(attempt.status), pill(attempt.outcome),
         attempt.matching_method || "—", attempt.error_code || attempt.error_message || "—",
-        { node: makeDisclosure(attempt), className: "wrap" },
+        { node: makeDisclosure(attempt, place.worker_id), className: "wrap" },
       ]);
       detailPlace = place;
       attemptsOffset = offset;
@@ -701,23 +748,74 @@
     }
   }
 
-  function makeDisclosure(attempt) {
+  function lazyDisclosure({ key, loadKey, label, cache, load, format }) {
     const details = el("details");
-    details.dataset.detailKey = attempt.attempt_id;
+    details.dataset.detailKey = key;
     const summary = el("summary", "", "View");
-    summary.dataset.focusKey = attempt.attempt_id;
-    summary.setAttribute("aria-label", `View evidence for attempt completed ${formatDate(attempt.worker_completed_at)}`);
-    details.append(summary);
-    const pre = el("pre");
-    pre.textContent = JSON.stringify({
-      started_at: attempt.worker_started_at,
-      completed_at: attempt.worker_completed_at,
-      candidates: attempt.candidates,
-      proposal: attempt.proposal,
-      errors: attempt.errors,
-    }, null, 2);
-    details.append(pre);
+    summary.dataset.focusKey = key;
+    summary.setAttribute("aria-label", label);
+    const content = el("div", "disclosure-content");
+    details.append(summary, content);
+
+    const show = async () => {
+      if (!details.open) return;
+      if (cache.has(key)) {
+        const pre = el("pre");
+        pre.textContent = JSON.stringify(format(cache.get(key)), null, 2);
+        content.replaceChildren(pre);
+        content.removeAttribute("aria-busy");
+        return;
+      }
+      const loading = el("p", "muted", "Loading details…");
+      loading.setAttribute("role", "status");
+      content.replaceChildren(loading);
+      content.setAttribute("aria-busy", "true");
+      let pending = detailLoads.get(loadKey);
+      if (!pending) {
+        pending = Promise.resolve().then(load).then((value) => {
+          cache.set(key, value);
+          return value;
+        }).finally(() => detailLoads.delete(loadKey));
+        detailLoads.set(loadKey, pending);
+      }
+      try {
+        await pending;
+        if (details.isConnected && details.open) await show();
+      } catch (error) {
+        if (!details.isConnected || !details.open) return;
+        content.removeAttribute("aria-busy");
+        const message = el("p", "field-error", error?.message || "Unable to load details.");
+        message.setAttribute("role", "alert");
+        const retry = el("button", "secondary", "Retry loading details");
+        retry.type = "button";
+        retry.addEventListener("click", () => {
+          summary.focus({ preventScroll: true });
+          show();
+        });
+        content.replaceChildren(message, retry);
+      }
+    };
+    details.addEventListener("toggle", () => { if (details.open) show(); });
     return details;
+  }
+
+  function makeDisclosure(attempt, workerId) {
+    const key = JSON.stringify([workerId, attempt.attempt_id]);
+    return lazyDisclosure({
+      key, loadKey: `attempt:${key}`, cache: attemptEvidence,
+      label: `View evidence for attempt completed ${formatDate(attempt.worker_completed_at)}`,
+      load: async () => {
+        const result = await client.from("monitoring_attempts").select("candidates,proposal,errors")
+          .eq("worker_id", workerId).eq("attempt_id", attempt.attempt_id).maybeSingle();
+        const evidence = resultOrThrow(result);
+        if (!evidence) throw new Error("Attempt evidence is no longer available.");
+        return evidence;
+      },
+      format: (evidence) => ({
+        started_at: attempt.worker_started_at, completed_at: attempt.worker_completed_at,
+        candidates: evidence.candidates, proposal: evidence.proposal, errors: evidence.errors,
+      }),
+    });
   }
 
   async function renderLogs(isCurrent) {
@@ -725,7 +823,7 @@
     const { severity, from: fromTime, to: toTime } = logFilters;
     const fetchPage = (offset) => {
       let query = client.from("monitoring_operational_events")
-        .select("event_id,worker_id,run_id,attempt_id,worker_sequence,event_type,severity,data,worker_occurred_at,received_at", { count: "exact" })
+        .select("event_id,worker_id,run_id,event_type,severity,received_at", { count: "exact" })
         .order("received_at", { ascending: false })
         .order("event_id", { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1);
@@ -765,16 +863,19 @@
   }
 
   function jsonDisclosure(event) {
-    const details = el("details");
-    details.dataset.detailKey = event.event_id;
-    const summary = el("summary", "", "View");
-    summary.dataset.focusKey = event.event_id;
-    summary.setAttribute("aria-label", `View details for ${event.event_type} received ${formatDate(event.received_at)}`);
-    details.append(summary);
-    const pre = el("pre");
-    pre.textContent = JSON.stringify(event.data ?? {}, null, 2);
-    details.append(pre);
-    return details;
+    const key = event.event_id;
+    return lazyDisclosure({
+      key, loadKey: `event:${key}`, cache: eventDetails,
+      label: `View details for ${event.event_type} received ${formatDate(event.received_at)}`,
+      load: async () => {
+        const result = await client.from("monitoring_operational_events").select("data")
+          .eq("event_id", key).maybeSingle();
+        const row = resultOrThrow(result);
+        if (!row) throw new Error("Log details are no longer available.");
+        return row.data ?? {};
+      },
+      format: (data) => data,
+    });
   }
 
   async function refreshCurrent() {
@@ -828,11 +929,12 @@
   async function refreshAll() {
     const request = ++workersRequest;
     if (document.hidden || !client) return;
+    const view = activeView;
     const status = ++statusRequest;
-    const isCurrent = () => request === workersRequest && !document.hidden;
+    const isCurrent = () => request === workersRequest && !document.hidden && activeView === view;
     setLive("", "Updating…");
     try {
-      if (await refreshWorkers(isCurrent)) await refreshCurrent();
+      if (view === "overview" || await refreshWorkers(isCurrent)) await refreshCurrent();
     } catch (error) {
       if (isCurrent() && status === statusRequest) {
         const placeholder = document.querySelector(`#${activeView}-view .view-placeholder`);
@@ -849,7 +951,7 @@
 
   function startPolling() {
     stopPolling();
-    if (!document.hidden) pollTimer = window.setInterval(refreshAll, 30_000);
+    if (!document.hidden) pollTimer = window.setInterval(refreshAll, POLL_INTERVAL);
   }
 
   function stopPolling() {
@@ -860,6 +962,7 @@
   function switchView(view) {
     document.getElementById(`${activeView}-view`).removeAttribute("aria-busy");
     activeView = view;
+    workersRequest += 1;
     detailRequest += 1;
     document.querySelectorAll(".tab").forEach((button) => {
       const selected = button.dataset.view === view;
@@ -944,6 +1047,7 @@
     if (!event.currentTarget.open) {
       detailRequest += 1;
       detailPlace = null;
+      detailPlaceLoaded = false;
       document.getElementById("attempts-table").removeAttribute("aria-busy");
       const opener = detailOpenerKey && Array.from(document.querySelectorAll("#places-table [data-focus-key]"))
         .find((element) => element.dataset.focusKey === detailOpenerKey);

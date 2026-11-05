@@ -36,6 +36,13 @@ The worker selector applies across all sections. On Places and Logs, select
 that section while keeping the selected worker. Log date filters use the
 browser's local time. Tables can scroll horizontally on smaller screens.
 
+The visible dashboard refreshes every five minutes; the refresh button, filters,
+pagination, and worker selection update immediately. Polling pauses in hidden
+tabs. Place lists and collapsed log and attempt details transfer only their
+summary fields; full evidence loads when opened. Loaded log and attempt details
+are cached in memory until the page is closed or reloaded. Searches containing
+special characters use the existing full-place search to preserve its behavior.
+
 ## Overview metrics
 
 Performance cards use completed attempts in the rolling last 24 hours, based on
@@ -49,7 +56,9 @@ Rates without attempts are displayed as unavailable rather than zero.
 Pending queue and worker status use the most recently uploaded snapshots. The
 queue total includes both `pending` and `retry_wait`, including rechecks that
 may not be due yet. A recent worker heartbeat means one was received within
-three minutes, and a pause reason is the last reported value. Resume and exit
+ten minutes, and a pause reason is the last reported value. With five-minute
+refreshes, a stopped worker can take about 10–15 minutes after its last
+heartbeat to appear as not reporting. Resume and exit
 snapshots update that state in worker sequence order; historical exits remain
 visible separately. Upload delays can make these snapshots lag behind the worker.
 
