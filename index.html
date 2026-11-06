@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Scraper Monitor</title>
+  <title>มอนิเตอร์ Scraper</title>
   <script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
   <link rel="stylesheet" href="styles.css">
   <script src="config.js"></script>
@@ -12,19 +12,19 @@
   <script src="app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to dashboard content</a>
+  <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหาแดชบอร์ด</a>
   <div id="app-view" class="app-shell">
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg></span>
-        <div><p class="brand-overline">Google Maps / Operations</p><h1>Scraper Monitor</h1></div>
+        <div><p class="brand-overline">Google Maps / การทำงาน</p><h1>มอนิเตอร์ Scraper</h1></div>
       </div>
       <div class="account-actions">
-        <span class="live" id="live-status" title="Auto-refreshes every 5 minutes"><i></i><span id="live-text">Connecting…</span></span>
+        <span class="live" id="live-status" title="รีเฟรชอัตโนมัติทุก 5 นาที"><i></i><span id="live-text">กำลังเชื่อมต่อ…</span></span>
         <div class="header-controls">
-          <label class="worker-picker">Worker<select id="active-worker"></select></label>
-          <button id="refresh" class="icon-btn" type="button" title="Refresh now" aria-label="Refresh now"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2.6L20 12M4 12l2.8 5.6A7 7 0 0 0 18.4 15"/></svg></button>
-          <button id="theme-toggle" class="icon-btn" type="button" title="Switch to dark theme" aria-label="Switch to dark theme">
+          <label class="worker-picker">เวิร์กเกอร์<select id="active-worker"></select></label>
+          <button id="refresh" class="icon-btn" type="button" title="รีเฟรชตอนนี้" aria-label="รีเฟรชตอนนี้"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2.6L20 12M4 12l2.8 5.6A7 7 0 0 0 18.4 15"/></svg></button>
+          <button id="theme-toggle" class="icon-btn" type="button" title="เปลี่ยนเป็นธีมมืด" aria-label="เปลี่ยนเป็นธีมมืด">
             <svg id="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13.2A8.6 8.6 0 0 1 10.8 3.1 8.8 8.8 0 1 0 20.9 13.2Z"/></svg>
             <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
           </button>
@@ -33,61 +33,61 @@
       </div>
     </header>
     <div class="nav-row">
-      <nav class="tabs" aria-label="Dashboard sections">
-        <button class="tab active" data-view="overview" type="button" aria-pressed="true">Overview</button>
-        <button class="tab" data-view="places" type="button" aria-pressed="false">Places</button>
-        <button class="tab" data-view="logs" type="button" aria-pressed="false">Logs</button>
+      <nav class="tabs" aria-label="ส่วนต่าง ๆ ของแดชบอร์ด">
+        <button class="tab active" data-view="overview" type="button" aria-pressed="true">ภาพรวม</button>
+        <button class="tab" data-view="places" type="button" aria-pressed="false">สถานที่</button>
+        <button class="tab" data-view="logs" type="button" aria-pressed="false">บันทึกเหตุการณ์</button>
       </nav>
-      <span class="nav-meta">AUTO REFRESH <b>·</b> 5 MIN</span>
+      <span class="nav-meta">รีเฟรชอัตโนมัติ <b>·</b> 5 นาที</span>
     </div>
     <main id="main-content" tabindex="-1">
     <p id="global-error" class="error-message" role="alert"></p>
-    <p id="stale-note" class="stale-note" hidden>Some displayed information may be out of date. Use Refresh now to retry.</p>
-    <section id="overview-view" class="view"><p class="view-placeholder" role="status">Loading overview…</p></section>
+    <p id="stale-note" class="stale-note" hidden>ข้อมูลบางส่วนอาจไม่เป็นปัจจุบัน กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง</p>
+    <section id="overview-view" class="view"><p class="view-placeholder" role="status">กำลังโหลดภาพรวม…</p></section>
     <section id="places-view" class="view" hidden>
-      <div class="section-heading"><div><h2>Places</h2><p class="muted">Collected evidence by OSM place.</p></div></div>
-      <form id="places-filters" class="filters" aria-label="Place filters">
-        <label>Search<input id="place-query" type="search" placeholder="Name or OSM ID"></label>
-        <label>Outcome<select id="place-outcome"><option value="">All outcomes</option><option>found</option><option>found_no_phone</option><option>not_found</option><option>ambiguous</option></select></label>
-        <label>Queue status<select id="place-status"><option value="">All statuses</option><option>pending</option><option>running</option><option>retry_wait</option><option>checked</option><option>exhausted</option><option>skipped</option><option>blocked</option><option>failed</option></select></label>
-        <label>Review<select id="place-review"><option value="">All</option><option value="true">Needs review</option><option value="false">No review flag</option></select></label>
-        <div class="filter-actions"><button id="place-reset" class="secondary" type="button">Reset filters</button><button id="place-search" type="submit">Apply filters</button></div>
-        <p class="filter-hint">Apply changes to update results. The worker selection applies across sections.</p>
+      <div class="section-heading"><div><h2>สถานที่</h2><p class="muted">หลักฐานที่รวบรวมได้ แยกตามสถานที่ใน OSM</p></div></div>
+      <form id="places-filters" class="filters" aria-label="ตัวกรองสถานที่">
+        <label>ค้นหา<input id="place-query" type="search" placeholder="ชื่อหรือ OSM ID"></label>
+        <label>ผลลัพธ์<select id="place-outcome"><option value="">ผลลัพธ์ทั้งหมด</option><option value="found">พบสถานที่</option><option value="found_no_phone">พบสถานที่ (ไม่มีเบอร์โทร)</option><option value="not_found">ไม่พบสถานที่</option><option value="ambiguous">ผลลัพธ์ไม่ชัดเจน</option></select></label>
+        <label>สถานะคิว<select id="place-status"><option value="">สถานะทั้งหมด</option><option value="pending">รอดำเนินการ</option><option value="running">กำลังทำงาน</option><option value="retry_wait">รอลองอีกครั้ง</option><option value="checked">ตรวจแล้ว</option><option value="exhausted">ครบจำนวนครั้งแล้ว</option><option value="skipped">ข้ามแล้ว</option><option value="blocked">ถูกบล็อก</option><option value="failed">ล้มเหลว</option></select></label>
+        <label>การตรวจทาน<select id="place-review"><option value="">ทั้งหมด</option><option value="true">ต้องตรวจทาน</option><option value="false">ไม่มีเครื่องหมายให้ตรวจทาน</option></select></label>
+        <div class="filter-actions"><button id="place-reset" class="secondary" type="button">ล้างตัวกรอง</button><button id="place-search" type="submit">ใช้ตัวกรอง</button></div>
+        <p class="filter-hint">กดใช้ตัวกรองเพื่ออัปเดตผลลัพธ์ การเลือกเวิร์กเกอร์มีผลกับทุกส่วน</p>
       </form>
       <section class="chart-panel place-time-panel" aria-labelledby="place-time-title">
-        <h3 id="place-time-title" class="chart-title" tabindex="-1">Inspection time by place</h3>
-        <p class="chart-description">Latest recorded attempt on this page, from worker start to completion. Queue time is excluded.</p>
-        <div id="place-time-chart"><p class="chart-empty" role="status">Loading inspection times…</p></div>
+        <h3 id="place-time-title" class="chart-title" tabindex="-1">เวลาในการตรวจสอบแต่ละสถานที่</h3>
+        <p class="chart-description">การลองตรวจสอบครั้งล่าสุดในหน้านี้ นับตั้งแต่เวิร์กเกอร์เริ่มจนเสร็จ ไม่นับเวลารอในคิว</p>
+        <div id="place-time-chart"><p class="chart-empty" role="status">กำลังโหลดเวลาตรวจสอบ…</p></div>
       </section>
-      <div id="places-table"><p class="view-placeholder" role="status">Loading places…</p></div>
-      <nav class="pager" aria-label="Places pages"><button id="places-prev" class="secondary" type="button" disabled>Previous</button><span id="places-page" aria-live="polite"></span><button id="places-next" class="secondary" type="button" disabled>Next</button></nav>
+      <div id="places-table"><p class="view-placeholder" role="status">กำลังโหลดสถานที่…</p></div>
+      <nav class="pager" aria-label="หน้ารายการสถานที่"><button id="places-prev" class="secondary" type="button" disabled>ก่อนหน้า</button><span id="places-page" aria-live="polite"></span><button id="places-next" class="secondary" type="button" disabled>ถัดไป</button></nav>
     </section>
     <section id="logs-view" class="view" hidden>
-      <div class="section-heading"><div><h2>Operational logs</h2><p class="muted">Worker events with server receipt times.</p></div></div>
-      <form id="logs-filters" class="filters" aria-label="Log filters">
-        <label>Worker<select id="log-worker"></select></label>
-        <label>Severity<select id="log-severity"><option value="">All severities</option><option>debug</option><option>info</option><option>warning</option><option>error</option></select></label>
-        <label>From<input id="log-from" type="datetime-local" aria-describedby="log-date-error"></label>
-        <label>To<input id="log-to" type="datetime-local" aria-describedby="log-date-error"></label>
-        <div class="filter-actions"><button id="log-reset" class="secondary" type="button">Reset filters</button><button id="log-search" type="submit">Apply filters</button></div>
-        <p class="filter-hint">Dates use your local time. Apply changes to update results; the worker selection updates all sections immediately.</p>
+      <div class="section-heading"><div><h2>บันทึกการทำงาน</h2><p class="muted">เหตุการณ์จากเวิร์กเกอร์ พร้อมเวลาที่เซิร์ฟเวอร์ได้รับ</p></div></div>
+      <form id="logs-filters" class="filters" aria-label="ตัวกรองบันทึกเหตุการณ์">
+        <label>เวิร์กเกอร์<select id="log-worker"></select></label>
+        <label>ระดับความรุนแรง<select id="log-severity"><option value="">ทุกระดับ</option><option value="debug">ข้อมูลวินิจฉัย</option><option value="info">ข้อมูล</option><option value="warning">คำเตือน</option><option value="error">ข้อผิดพลาด</option></select></label>
+        <label>ตั้งแต่<input id="log-from" type="datetime-local" aria-describedby="log-date-error"></label>
+        <label>ถึง<input id="log-to" type="datetime-local" aria-describedby="log-date-error"></label>
+        <div class="filter-actions"><button id="log-reset" class="secondary" type="button">ล้างตัวกรอง</button><button id="log-search" type="submit">ใช้ตัวกรอง</button></div>
+        <p class="filter-hint">วันที่ใช้เวลาท้องถิ่นของคุณ กดใช้ตัวกรองเพื่ออัปเดตผลลัพธ์ การเลือกเวิร์กเกอร์มีผลกับทุกส่วนทันที</p>
         <p id="log-date-error" class="field-error" role="alert" hidden></p>
       </form>
-      <div id="logs-table"><p class="view-placeholder" role="status">Loading logs…</p></div>
-      <nav class="pager" aria-label="Log pages"><button id="logs-prev" class="secondary" type="button" disabled>Previous</button><span id="logs-page" aria-live="polite"></span><button id="logs-next" class="secondary" type="button" disabled>Next</button></nav>
+      <div id="logs-table"><p class="view-placeholder" role="status">กำลังโหลดบันทึกเหตุการณ์…</p></div>
+      <nav class="pager" aria-label="หน้าบันทึกเหตุการณ์"><button id="logs-prev" class="secondary" type="button" disabled>ก่อนหน้า</button><span id="logs-page" aria-live="polite"></span><button id="logs-next" class="secondary" type="button" disabled>ถัดไป</button></nav>
     </section>
     </main>
   </div>
 
   <dialog id="place-dialog" class="detail-dialog" aria-labelledby="detail-title">
-    <div class="dialog-head"><div><p class="eyebrow">Place evidence</p><h2 id="detail-title"></h2></div><button id="detail-close" class="secondary">Close</button></div>
+    <div class="dialog-head"><div><p class="eyebrow">หลักฐานสถานที่</p><h2 id="detail-title"></h2></div><button id="detail-close" class="secondary">ปิด</button></div>
     <div id="detail-error" class="error-message" role="alert"></div>
-    <button id="detail-retry" class="secondary" type="button" hidden>Retry loading details</button>
+    <button id="detail-retry" class="secondary" type="button" hidden>ลองโหลดรายละเอียดอีกครั้ง</button>
     <div id="detail-content"></div>
-    <h3>Attempt history</h3>
-    <p class="muted attempt-note">Duration runs from the worker starting to completing an attempt; queue time is excluded.</p>
+    <h3>ประวัติการลองตรวจสอบ</h3>
+    <p class="muted attempt-note">ระยะเวลานับตั้งแต่เวิร์กเกอร์เริ่มจนจบการลองตรวจสอบ ไม่นับเวลารอในคิว</p>
     <div id="attempts-table"></div>
-    <nav class="pager" aria-label="Attempt history pages"><button id="attempts-prev" class="secondary" type="button">Previous</button><span id="attempts-page" aria-live="polite"></span><button id="attempts-next" class="secondary" type="button">Next</button></nav>
+    <nav class="pager" aria-label="หน้าประวัติการลองตรวจสอบ"><button id="attempts-prev" class="secondary" type="button">ก่อนหน้า</button><span id="attempts-page" aria-live="polite"></span><button id="attempts-next" class="secondary" type="button">ถัดไป</button></nav>
   </dialog>
 </body>
 </html>

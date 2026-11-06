@@ -4,6 +4,20 @@
   const PAGE_SIZE = 50;
   const POLL_INTERVAL = 5 * 60_000;
   const HEARTBEAT_WINDOW = 10 * 60_000;
+  const STATUS_LABELS = {
+    found: "พบสถานที่", found_no_phone: "พบสถานที่ (ไม่มีเบอร์โทร)", not_found: "ไม่พบสถานที่",
+    ambiguous: "ผลลัพธ์ไม่ชัดเจน", lookup_error: "ข้อผิดพลาดในการค้นหา",
+    pending: "รอดำเนินการ", running: "กำลังทำงาน", retry_wait: "รอลองอีกครั้ง", checked: "ตรวจแล้ว",
+    exhausted: "ครบจำนวนครั้งแล้ว", skipped: "ข้ามแล้ว", blocked: "ถูกบล็อก", failed: "ล้มเหลว",
+    paused: "หยุดชั่วคราว", no_due_work: "ไม่มีงานที่ถึงกำหนด", interrupted: "ถูกขัดจังหวะ",
+    debug: "ข้อมูลวินิจฉัย", info: "ข้อมูล", warning: "คำเตือน", error: "ข้อผิดพลาด",
+    "needs review": "ต้องตรวจทาน",
+  };
+  const EVENT_LABELS = {
+    imported_snapshot: "นำเข้าภาพสถานะ", run_started: "เริ่มการทำงาน", heartbeat: "สัญญาณชีพ",
+    lookup_started: "เริ่มค้นหา", lookup_completed: "ค้นหาเสร็จแล้ว", lookup_retry: "ลองค้นหาอีกครั้ง", run_ended: "สิ้นสุดการทำงาน",
+    queue_resumed: "กลับมาทำงานต่อ", queue_paused: "หยุดคิวชั่วคราว",
+  };
   const config = window.GOOGLE_MONITORING_CONFIG || {};
   const globalError = document.getElementById("global-error");
   const eventDetails = new Map();
@@ -46,7 +60,7 @@
   function formatDate(value) {
     if (!value) return "—";
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("th-TH-u-nu-latn");
   }
 
   function durationMilliseconds(startedAt, completedAt) {
@@ -58,16 +72,16 @@
   function formatDuration(startedAt, completedAt) {
     const elapsed = durationMilliseconds(startedAt, completedAt);
     if (elapsed === null) return "—";
-    if (elapsed === 0) return "0 s";
-    if (elapsed < 100) return "<0.1 s";
+    if (elapsed === 0) return "0 วินาที";
+    if (elapsed < 100) return "น้อยกว่า 0.1 วินาที";
     const tenths = Math.round(elapsed / 100);
     const minutes = Math.floor(tenths / 600);
     const seconds = (tenths % 600) / 10;
-    return `${minutes ? `${minutes} min ` : ""}${seconds} s`;
+    return `${minutes ? `${minutes} นาที ` : ""}${seconds} วินาที`;
   }
 
   function formatCount(value) {
-    return Number(value || 0).toLocaleString();
+    return Number(value || 0).toLocaleString("th-TH-u-nu-latn");
   }
 
   function setError(message = "") {
@@ -76,23 +90,28 @@
     const hasData = document.getElementById(`${activeView}-view`).querySelector(".summary-grid, .table-wrap");
     const staleNote = document.getElementById("stale-note");
     if (!message) lastSuccessfulUpdate = new Date();
-    staleNote.textContent = `Some displayed information may be out of date.${lastSuccessfulUpdate
-      ? ` Last updated ${lastSuccessfulUpdate.toLocaleTimeString()}.` : ""} Use Refresh now to retry.`;
+    staleNote.textContent = `ข้อมูลบางส่วนอาจไม่เป็นปัจจุบัน${lastSuccessfulUpdate
+      ? ` อัปเดตล่าสุด ${lastSuccessfulUpdate.toLocaleTimeString("th-TH-u-nu-latn")}` : ""} กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง`;
     staleNote.hidden = !message || !hasData;
-    setLive(message ? "bad" : "ok", message ? "Update failed" : `Updated ${lastSuccessfulUpdate.toLocaleTimeString()}`);
+    setLive(message ? "bad" : "ok", message ? "อัปเดตไม่สำเร็จ" : `อัปเดตแล้ว ${lastSuccessfulUpdate.toLocaleTimeString("th-TH-u-nu-latn")}`);
   }
 
   function setWarning(message) {
     globalError.classList.add("warning");
     globalError.textContent = message;
     document.getElementById("stale-note").hidden = true;
-    setLive("warning", "Partial update");
+    setLive("warning", "อัปเดตบางส่วน");
   }
 
   function setLive(state, text) {
     const live = document.getElementById("live-status");
     live.className = `live ${state}`;
     document.getElementById("live-text").textContent = text;
+  }
+
+  function errorText(error, fallback) {
+    const detail = error?.message;
+    return detail ? `${fallback} (${detail})` : fallback;
   }
 
   const PILL_TONES = {
@@ -103,7 +122,11 @@
 
   function pill(value, label = value) {
     if (value == null || value === "" || value === "—") return "—";
-    return { node: el("span", `pill ${PILL_TONES[value] || "neutral"}`, label) };
+    return { node: el("span", `pill ${PILL_TONES[value] || "neutral"}`, STATUS_LABELS[label] || label) };
+  }
+
+  function eventLabel(value) {
+    return EVENT_LABELS[value] || value || "—";
   }
 
   function resultOrThrow(result) {
@@ -111,12 +134,12 @@
     return result.data;
   }
 
-  function makeTable(headers, rows, label, emptyMessage = "No records found.") {
+  function makeTable(headers, rows, label, emptyMessage = "ไม่พบรายการ") {
     const wrapper = el("div", "table-wrap");
     wrapper.tabIndex = 0;
     wrapper.setAttribute("role", "region");
     wrapper.setAttribute("aria-label", label);
-    const scrollHint = el("p", "table-scroll-hint", "Scroll sideways to see all columns.");
+    const scrollHint = el("p", "table-scroll-hint", "เลื่อนด้านข้างเพื่อดูคอลัมน์ทั้งหมด");
     scrollHint.setAttribute("aria-hidden", "true");
     const table = el("table");
     const thead = el("thead");
@@ -169,7 +192,7 @@
     const page = Math.floor(offset / PAGE_SIZE) + 1;
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const pageLabel = document.getElementById(`${prefix}-page`);
-    const description = `Page ${page} of ${pages} · ${formatCount(total)} rows`;
+    const description = `หน้า ${page} จาก ${pages} · ${formatCount(total)} รายการ`;
     if (pageLabel.textContent !== description) pageLabel.textContent = description;
     const previous = document.getElementById(`${prefix}-prev`);
     const next = document.getElementById(`${prefix}-next`);
@@ -185,14 +208,14 @@
 
   function syncWorkerPicker(picker) {
     if (picker.value !== activeWorker) picker.value = activeWorker;
-    const title = picker.selectedOptions[0]?.textContent || "All workers";
+    const title = picker.selectedOptions[0]?.textContent || "เวิร์กเกอร์ทั้งหมด";
     if (picker.title !== title) picker.title = title;
   }
 
   function populateWorkers() {
     const active = document.getElementById("active-worker");
     const logWorker = document.getElementById("log-worker");
-    const options = [{ value: "", label: "All workers" }, ...workers.map((worker) => ({
+    const options = [{ value: "", label: "เวิร์กเกอร์ทั้งหมด" }, ...workers.map((worker) => ({
       value: worker.worker_id,
       label: `${workerLabel(worker)} · ${worker.worker_id.slice(0, 8)}`,
     }))];
@@ -263,11 +286,11 @@
   }
 
   function rate(numerator, denominator) {
-    if (numerator === null || denominator === null) return { value: "—", detail: "Count unavailable" };
-    if (!denominator) return { value: "—", detail: "No completed attempts" };
+    if (numerator === null || denominator === null) return { value: "—", detail: "ไม่มีข้อมูลจำนวนครั้ง" };
+    if (!denominator) return { value: "—", detail: "ไม่มีการลองตรวจสอบที่เสร็จแล้ว" };
     return {
       value: `${(numerator * 100 / denominator).toFixed(1)}%`,
-      detail: `${formatCount(numerator)} of ${formatCount(denominator)} attempts`,
+      detail: `${formatCount(numerator)} จาก ${formatCount(denominator)} ครั้ง`,
       percent: numerator * 100 / denominator,
     };
   }
@@ -295,17 +318,17 @@
   function attemptChart(attempts) {
     const section = el("section", "chart-panel");
     section.dataset.chart = "attempts";
-    const title = el("h3", "chart-title", "Attempt results");
+    const title = el("h3", "chart-title", "ผลการลองตรวจสอบ");
     title.id = "attempt-chart-title";
     section.setAttribute("aria-labelledby", title.id);
-    section.append(title, el("p", "chart-description", "Completed attempts · last 24 hours"));
+    section.append(title, el("p", "chart-description", "การลองตรวจสอบที่เสร็จแล้ว · 24 ชั่วโมงล่าสุด"));
 
     if (attempts.matched === null || attempts.total === null) {
-      section.append(el("p", "chart-empty", "Attempt counts are unavailable. Retrying automatically."));
+      section.append(el("p", "chart-empty", "ไม่มีข้อมูลจำนวนครั้ง ระบบจะลองใหม่อัตโนมัติ"));
       return section;
     }
     if (!attempts.total) {
-      section.append(el("p", "chart-empty", "No completed attempts in the last 24 hours."));
+      section.append(el("p", "chart-empty", "ไม่มีการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงที่ผ่านมา"));
       return section;
     }
 
@@ -315,13 +338,13 @@
     const donut = el("div", "chart-donut");
     donut.style.setProperty("--matched-share", `${matched * 100 / attempts.total}%`);
     const center = el("div", "chart-donut-center");
-    center.append(el("strong", "", formatCount(attempts.total)), el("span", "", "completed"));
+    center.append(el("strong", "", formatCount(attempts.total)), el("span", "", "เสร็จแล้ว"));
     donut.append(center);
 
     const legend = el("ul", "chart-legend");
     [
-      { key: "matched", label: "Matched", count: matched },
-      { key: "other", label: "Other results", count: other },
+      { key: "matched", label: "จับคู่ได้", count: matched },
+      { key: "other", label: "ผลลัพธ์อื่น", count: other },
     ].forEach(({ key, label, count }) => {
       const item = el("li", "chart-legend-item");
       item.dataset.result = key;
@@ -334,22 +357,22 @@
       legend.append(item);
     });
     layout.append(donut, legend);
-    section.append(layout, el("p", "chart-note", "Matches include results with or without a phone number."));
+    section.append(layout, el("p", "chart-note", "ผลที่จับคู่ได้รวมทั้งรายการที่มีและไม่มีเบอร์โทร"));
     return section;
   }
 
   function queueChart(pending, scheduled, running) {
     const section = el("section", "chart-panel");
     section.dataset.chart = "queue";
-    const title = el("h3", "chart-title", "Queue snapshot");
+    const title = el("h3", "chart-title", "ภาพรวมคิว");
     title.id = "queue-chart-title";
     section.setAttribute("aria-labelledby", title.id);
-    section.append(title, el("p", "chart-description", "Latest uploaded counts · scaled to the largest group"));
+    section.append(title, el("p", "chart-description", "จำนวนล่าสุดที่อัปโหลด · ปรับสเกลตามกลุ่มที่มีจำนวนมากที่สุด"));
 
     const rows = [
-      { key: "pending", label: "Pending", count: pending },
-      { key: "scheduled", label: "Scheduled", count: scheduled },
-      { key: "running", label: "Running", count: running },
+      { key: "pending", label: "รอดำเนินการ", count: pending },
+      { key: "scheduled", label: "กำหนดไว้", count: scheduled },
+      { key: "running", label: "กำลังทำงาน", count: running },
     ];
     const maximum = Math.max(...rows.map((row) => row.count));
     const list = el("ul", "chart-bars");
@@ -366,7 +389,7 @@
       item.append(heading, track);
       list.append(item);
     });
-    section.append(list, el("p", "chart-note", "Scheduled includes future rechecks."));
+    section.append(list, el("p", "chart-note", "รายการที่กำหนดไว้รวมการตรวจซ้ำในอนาคต"));
     return section;
   }
 
@@ -392,7 +415,7 @@
     ]);
     if (!isCurrent() || !attempts) return "";
     const data = resultOrThrow(result);
-    if (!Array.isArray(data?.workers)) throw new Error("Worker data is unavailable.");
+    if (!Array.isArray(data?.workers)) throw new Error("ไม่มีข้อมูลเวิร์กเกอร์");
     workers = data.workers;
     if (workerId && !workers.some((worker) => worker.worker_id === workerId)) {
       setActiveWorker("");
@@ -416,46 +439,46 @@
     const content = document.createDocumentFragment();
     const heading = el("div", "overview-heading");
     const intro = el("div");
-    intro.append(el("p", "eyebrow", "Monitoring / Overview"), el("h2", "overview-title", "Operations at a glance"),
-      el("p", "overview-description", "Performance, queue health, and worker activity in one place."));
-    const period = el("div", "period-label", "Last 24 hours");
+    intro.append(el("p", "eyebrow", "มอนิเตอร์ / ภาพรวม"), el("h2", "overview-title", "สรุปการทำงาน"),
+      el("p", "overview-description", "ดูประสิทธิภาพ สถานะคิว และการทำงานของเวิร์กเกอร์ได้ในที่เดียว"));
+    const period = el("div", "period-label", "24 ชั่วโมงล่าสุด");
     heading.append(intro, period);
     content.append(heading);
 
     const summary = el("div", "summary-grid");
     summary.append(
-      summaryCard("success", "Success rate", successRate.value, successRate.detail, "Matched, with or without a phone", "✓", "success", successRate.percent),
-      summaryCard("blocked", "CAPTCHA / blocks", attempts.blocked === null ? "—" : formatCount(attempts.blocked),
-        attempts.blocked === null ? "Count unavailable" : "Blocked lookup attempts",
-        attempts.consent === null ? "Consent count unavailable" : `${formatCount(attempts.consent)} consent required`, "!", "danger"),
-      summaryCard("retry", "Retry rate", retryRate.value, retryRate.detail, "Scheduled after a temporary error", "↻", "warning", retryRate.percent),
-      summaryCard("queue", "Pending queue", formatCount(pending + scheduled),
-        `${formatCount(pending)} pending · ${formatCount(scheduled)} scheduled`,
-        `${formatCount(running)} running · includes future rechecks`, "≡", "info"),
-      summaryCard("workers", "Worker status", chosenWorkers.length ? `${formatCount(reporting)} / ${formatCount(chosenWorkers.length)}` : "—",
-        chosenWorkers.length ? "Recent heartbeats received" : "No workers provisioned",
-        chosenWorkers.length ? `${formatCount(chosenWorkers.length - reporting)} without a recent heartbeat · ${formatCount(paused)} last reported paused` : "Waiting for worker data", "◉", "accent"),
+      summaryCard("success", "อัตราความสำเร็จ", successRate.value, successRate.detail, "จับคู่ได้ ทั้งรายการที่มีและไม่มีเบอร์โทร", "✓", "success", successRate.percent),
+      summaryCard("blocked", "CAPTCHA / การบล็อก", attempts.blocked === null ? "—" : formatCount(attempts.blocked),
+        attempts.blocked === null ? "ไม่มีข้อมูลจำนวนครั้ง" : "ครั้งที่ค้นหาแล้วถูกบล็อก",
+        attempts.consent === null ? "ไม่มีข้อมูลคำขอความยินยอม" : `ต้องขอความยินยอม ${formatCount(attempts.consent)} ครั้ง`, "!", "danger"),
+      summaryCard("retry", "อัตราการลองซ้ำ", retryRate.value, retryRate.detail, "กำหนดให้ลองใหม่หลังเกิดข้อผิดพลาดชั่วคราว", "↻", "warning", retryRate.percent),
+      summaryCard("queue", "รายการในคิว", formatCount(pending + scheduled),
+        `${formatCount(pending)} รอดำเนินการ · ${formatCount(scheduled)} กำหนดไว้`,
+        `${formatCount(running)} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต`, "≡", "info"),
+      summaryCard("workers", "สถานะเวิร์กเกอร์", chosenWorkers.length ? `${formatCount(reporting)} / ${formatCount(chosenWorkers.length)}` : "—",
+        chosenWorkers.length ? "ได้รับสัญญาณชีพล่าสุด" : "ยังไม่มีเวิร์กเกอร์",
+        chosenWorkers.length ? `${formatCount(chosenWorkers.length - reporting)} ไม่มีสัญญาณชีพล่าสุด · ${formatCount(paused)} รายงานว่าหยุดทำงานล่าสุด` : "กำลังรอข้อมูลเวิร์กเกอร์", "◉", "accent"),
     );
     content.append(summary);
-    content.append(el("p", "summary-note", "Performance uses completed attempts in the last 24 hours. Queue and worker status reflect the latest uploaded snapshots."));
+    content.append(el("p", "summary-note", "ประสิทธิภาพคำนวณจากการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงล่าสุด ส่วนสถานะคิวและเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด"));
 
     const chartHeading = el("div", "activity-section-heading");
-    chartHeading.append(el("p", "eyebrow", "At a glance"), el("h2", "activity-section-title", "Activity breakdown"));
+    chartHeading.append(el("p", "eyebrow", "ภาพรวม"), el("h2", "activity-section-title", "รายละเอียดกิจกรรม"));
     const charts = el("div", "charts-grid");
     charts.append(attemptChart(attempts), queueChart(pending, scheduled, running));
     content.append(chartHeading, charts);
 
     const workerHeading = el("div", "worker-section-heading");
     const workerIntro = el("div");
-    workerIntro.append(el("p", "eyebrow", "Fleet activity"), el("h2", "worker-section-title", "Workers"));
-    workerHeading.append(workerIntro, el("p", "worker-section-note", "Heartbeat received within the last 10 minutes"));
+    workerIntro.append(el("p", "eyebrow", "กิจกรรมของเวิร์กเกอร์"), el("h2", "worker-section-title", "เวิร์กเกอร์"));
+    workerHeading.append(workerIntro, el("p", "worker-section-note", "สัญญาณชีพที่ได้รับภายใน 10 นาทีล่าสุด"));
     content.append(workerHeading);
 
-    if (!chosenWorkers.length) content.append(el("p", "empty panel", "No scraper worker is provisioned yet."));
+    if (!chosenWorkers.length) content.append(el("p", "empty panel", "ยังไม่มีการตั้งค่าเวิร์กเกอร์ Scraper"));
     chosenWorkers.forEach((worker) => {
       const state = worker.current_state || {};
       const recent = heartbeatRecent(worker, now);
-      const runStatus = recent ? "Heartbeat recent" : "Worker not reporting";
+      const runStatus = recent ? "สัญญาณชีพล่าสุด" : "เวิร์กเกอร์ไม่รายงานสถานะ";
       const runBadge = el("span", `badge${recent ? "" : " warning"}`, runStatus);
       const section = el("section", "worker-panel");
       const header = el("div", "worker-head");
@@ -463,28 +486,28 @@
       const avatar = el("span", "worker-avatar", workerLabel(worker).slice(0, 1).toUpperCase());
       avatar.setAttribute("aria-hidden", "true");
       const identityText = el("div");
-      identityText.append(el("h3", "worker-name", workerLabel(worker)), el("p", "worker-id", `Worker ID ${worker.worker_id}`));
+      identityText.append(el("h3", "worker-name", workerLabel(worker)), el("p", "worker-id", `รหัสเวิร์กเกอร์ ${worker.worker_id}`));
       identity.append(avatar, identityText);
       const badges = el("div", "worker-badges");
       badges.append(runBadge);
-      if (state.pause_reason) badges.append(el("span", "badge error", `Last reported paused: ${state.pause_reason}`));
-      else if (state.state_event_type === "queue_resumed") badges.append(el("span", "badge", "Queue resumed"));
-      else if (state.state_event_type === "run_ended") badges.append(el("span", "badge", "Runner stopped"));
+      if (state.pause_reason) badges.append(el("span", "badge error", `รายงานว่าหยุดทำงานล่าสุด: ${state.pause_reason}`));
+      else if (state.state_event_type === "queue_resumed") badges.append(el("span", "badge", "กลับมาทำงานต่อแล้ว"));
+      else if (state.state_event_type === "run_ended") badges.append(el("span", "badge", "Runner หยุดทำงานแล้ว"));
       header.append(identity, badges);
       section.append(header);
 
       const usage = state.daily_usage != null ? `${formatCount(state.daily_usage)} / ${state.daily_limit == null ? "—" : formatCount(state.daily_limit)}` : "—";
-      const day = state.bangkok_day ? `Bangkok day ${state.bangkok_day}` : "No usage reported yet";
-      const current = state.current_job ? `${state.current_job.name || "Unnamed place"} · ${state.current_job.osm_id || "—"}` : "No lookup reported";
-      const exit = worker.last_exit ? `${worker.last_exit.outcome || "exit reported"}${worker.last_exit.reason ? ` · ${worker.last_exit.reason}` : ""}` : "No run exit reported yet";
+      const day = state.bangkok_day ? `วันที่ตามเวลาไทย ${state.bangkok_day}` : "ยังไม่มีรายงานการใช้งาน";
+      const current = state.current_job ? `${state.current_job.name || "สถานที่ไม่มีชื่อ"} · ${state.current_job.osm_id || "—"}` : "ยังไม่มีรายงานการค้นหา";
+      const exit = worker.last_exit ? `${STATUS_LABELS[worker.last_exit.outcome] || worker.last_exit.outcome || "รายงานการสิ้นสุด"}${worker.last_exit.reason ? ` · ${worker.last_exit.reason}` : ""}` : "ยังไม่มีรายงานการสิ้นสุดรอบทำงาน";
       const queue = state.queue_counts || {};
-      const queueLine = Object.entries(queue).map(([name, count]) => `${name}: ${formatCount(count)}`).join(" · ") || "No queue counts reported yet";
+      const queueLine = Object.entries(queue).map(([name, count]) => `${STATUS_LABELS[name] || name}: ${formatCount(count)}`).join(" · ") || "ยังไม่มีรายงานจำนวนในคิว";
       const stats = el("div", "worker-stats");
       stats.append(
-        workerStat("Daily usage / limit", usage, day),
-        workerStat("Last reported lookup", current, `Pending uploads: ${state.pending_upload_count == null ? "—" : formatCount(state.pending_upload_count)}`),
-        workerStat("Last heartbeat", formatDate(worker.last_heartbeat_at), recent ? "Received within 10 minutes" : "No recent heartbeat received"),
-        workerStat("Last upload", formatDate(worker.last_upload_at), `Last seen ${formatDate(worker.last_seen_at)}`),
+        workerStat("การใช้งานรายวัน / ขีดจำกัด", usage, day),
+        workerStat("การค้นหาที่รายงานล่าสุด", current, `รออัปโหลด: ${state.pending_upload_count == null ? "—" : formatCount(state.pending_upload_count)}`),
+        workerStat("สัญญาณชีพล่าสุด", formatDate(worker.last_heartbeat_at), recent ? "ได้รับภายใน 10 นาที" : "ไม่ได้รับสัญญาณชีพล่าสุด"),
+        workerStat("อัปโหลดล่าสุด", formatDate(worker.last_upload_at), `พบล่าสุด ${formatDate(worker.last_seen_at)}`),
       );
       section.append(stats);
       const detail = el("div", "worker-meta");
@@ -492,15 +515,15 @@
       const safety = Number(lastExit.safety_sequence || 0) > Number(state.safety_sequence || state.state_sequence || 0)
         ? lastExit.safety : state.safety;
       const recentErrors = safety && safety.recent_temporary_errors != null && safety.recent_attempts != null
-        ? `${formatCount(safety.recent_temporary_errors)} / ${formatCount(safety.recent_attempts)} recent attempts · ${formatCount(safety.consecutive_temporary_errors)} consecutive`
-        : "Not reported yet";
-      detail.append(el("span", "", `Queue: ${queueLine}`), el("span", "", `Last reported exit: ${exit}`),
-        el("span", "", `Temporary errors: ${recentErrors}`));
+        ? `${formatCount(safety.recent_temporary_errors)} / ${formatCount(safety.recent_attempts)} ครั้งล่าสุด · เกิดต่อเนื่อง ${formatCount(safety.consecutive_temporary_errors)} ครั้ง`
+        : "ยังไม่มีรายงาน";
+      detail.append(el("span", "", `คิว: ${queueLine}`), el("span", "", `รายงานการสิ้นสุดล่าสุด: ${exit}`),
+        el("span", "", `ข้อผิดพลาดชั่วคราว: ${recentErrors}`));
       section.append(detail);
       content.append(section);
     });
     container.replaceChildren(content);
-    return unavailable ? "Some performance metrics are unavailable. Retrying automatically." : "";
+    return unavailable ? "ข้อมูลประสิทธิภาพบางรายการไม่พร้อมใช้งาน ระบบจะลองใหม่อัตโนมัติ" : "";
   }
 
   function selectedReview() {
@@ -536,11 +559,11 @@
     const fromTime = from ? new Date(from).getTime() : null;
     const toTime = to ? new Date(to).getTime() : null;
     if ((from && !Number.isFinite(fromTime)) || (to && !Number.isFinite(toTime))) {
-      setLogDateError("Enter valid start and end dates.");
+      setLogDateError("กรุณาระบุวันที่เริ่มต้นและวันที่สิ้นสุดให้ถูกต้อง");
       return;
     }
     if (fromTime !== null && toTime !== null && fromTime > toTime) {
-      setLogDateError("From must be on or before To.");
+      setLogDateError("วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด");
       return;
     }
     setLogDateError("");
@@ -606,7 +629,7 @@
     const container = document.getElementById("place-time-chart");
     const previous = container.querySelector(".place-time-list");
     if (signature !== placeTimeSignature || !previous) {
-      const loading = el("p", "chart-empty", "Loading inspection times…");
+      const loading = el("p", "chart-empty", "กำลังโหลดเวลาตรวจสอบ…");
       loading.setAttribute("role", "status");
       container.replaceChildren(loading);
     }
@@ -620,21 +643,21 @@
       const scrollTop = focusedList?.scrollTop || 0;
       if (!durations.length) {
         container.replaceChildren(el("p", "chart-empty", places.length
-          ? "No completed inspection times are available for these places yet."
-          : "No places to compare on this page."));
+          ? "ยังไม่มีเวลาตรวจสอบที่เสร็จแล้วสำหรับสถานที่เหล่านี้"
+          : "ไม่มีสถานที่ให้เปรียบเทียบในหน้านี้"));
         if (hadFocus) document.getElementById("place-time-title").focus({ preventScroll: true });
         return "";
       }
       const maximum = Math.max(...durations.map(({ elapsed }) => elapsed));
       const list = el("ol", "place-time-list");
       list.tabIndex = 0;
-      list.setAttribute("aria-label", "Inspection times, longest first");
+      list.setAttribute("aria-label", "เวลาตรวจสอบ เรียงจากนานที่สุด");
       durations.forEach(({ place, attempt, elapsed }) => {
         const item = el("li", "place-time-item");
         item.dataset.osmId = place.osm_id;
         item.dataset.workerId = place.worker_id;
         const heading = el("div", "place-time-heading");
-        const label = el("span", "place-time-label", place.source_record?.name || "(unnamed)");
+      const label = el("span", "place-time-label", place.source_record?.name || "(ไม่มีชื่อ)");
         label.append(el("span", "place-time-meta", `${place.osm_id} · ${place.worker_id.slice(0, 8)}`));
         heading.append(label, el("strong", "place-time-value",
           formatDuration(attempt.worker_started_at, attempt.worker_completed_at)));
@@ -647,11 +670,10 @@
         list.append(item);
       });
       const missing = places.length - durations.length;
-      const note = el("p", "place-time-note", `${formatCount(durations.length)} of ${formatCount(places.length)} ` +
-        `${places.length === 1 ? "place" : "places"} ${durations.length === 1 ? "has" : "have"} a recorded time. ` +
-        `Longest first.${missing ? ` ${formatCount(missing)} unavailable.` : ""}`);
+      const note = el("p", "place-time-note", `${formatCount(durations.length)} จาก ${formatCount(places.length)} สถานที่ ` +
+        `มีการบันทึกเวลา เรียงจากนานที่สุด${missing ? ` · ไม่มีข้อมูล ${formatCount(missing)} แห่ง` : ""}`);
       container.replaceChildren(list, note);
-      if (list.scrollHeight > list.clientHeight) note.textContent += " Scroll to see all.";
+      if (list.scrollHeight > list.clientHeight) note.textContent += " · เลื่อนเพื่อดูทั้งหมด";
       if (hadFocus) {
         list.focus({ preventScroll: true });
         list.scrollTop = scrollTop;
@@ -660,8 +682,8 @@
     } catch {
       if (!isCurrent()) return "";
       const hadFocus = container.contains(document.activeElement);
-      const message = el("p", "chart-empty", "Unable to load inspection times.");
-      const retry = el("button", "secondary", "Retry chart");
+      const message = el("p", "chart-empty", "โหลดเวลาตรวจสอบไม่สำเร็จ");
+      const retry = el("button", "secondary", "ลองโหลดกราฟอีกครั้ง");
       retry.type = "button";
       retry.addEventListener("click", () => {
         document.getElementById("place-time-title").focus({ preventScroll: true });
@@ -669,7 +691,7 @@
       });
       container.replaceChildren(message, retry);
       if (hadFocus) retry.focus({ preventScroll: true });
-      return "Inspection time chart is unavailable. Retrying automatically.";
+      return "กราฟเวลาตรวจสอบไม่พร้อมใช้งาน ระบบจะลองใหม่อัตโนมัติ";
     } finally {
       if (isCurrent()) container.removeAttribute("aria-busy");
     }
@@ -722,7 +744,7 @@
     placesTotal = Number(data.total || 0);
     const places = data.rows || [];
     const rows = places.map((place) => {
-      const name = place.source_record?.name || "(unnamed)";
+      const name = place.source_record?.name || "(ไม่มีชื่อ)";
       const button = el("button", "link", name);
       button.type = "button";
       button.dataset.focusKey = JSON.stringify([place.worker_id, place.osm_id]);
@@ -731,10 +753,10 @@
     });
     const filtered = query || outcome || queueStatus || review !== null || activeWorker;
     const emptyMessage = filtered
-      ? "No places match the current filters. Adjust the filters or worker selection and try again."
-      : "No places have been reported yet.";
+      ? "ไม่พบสถานที่ที่ตรงกับตัวกรองปัจจุบัน ลองปรับตัวกรองหรือเลือกเวิร์กเกอร์อื่น"
+      : "ยังไม่มีรายงานสถานที่";
     replaceTable(document.getElementById("places-table"), makeTable(
-      ["Name", "Worker", "OSM ID", "Outcome", "Queue", "Review", "Latest error"], rows, "Places table", emptyMessage,
+      ["ชื่อ", "เวิร์กเกอร์", "OSM ID", "ผลลัพธ์", "คิว", "ตรวจทาน", "ข้อผิดพลาดล่าสุด"], rows, "ตารางสถานที่", emptyMessage,
     ));
     setPager("places", offset, placesTotal,
       () => { placesOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
@@ -748,16 +770,16 @@
     detailPlaceLoaded = false;
     detailOpenerKey = JSON.stringify([place.worker_id, place.osm_id]);
     attemptsOffset = 0;
-    document.getElementById("detail-title").textContent = `${place.source_record?.name || "Place"} · ${place.osm_id}`;
+    document.getElementById("detail-title").textContent = `${place.source_record?.name || "สถานที่"} · ${place.osm_id}`;
     document.getElementById("detail-error").textContent = "";
     const retry = document.getElementById("detail-retry");
     retry.hidden = true;
     retry.disabled = false;
-    const loading = el("p", "muted detail-loading", "Loading place details…");
+    const loading = el("p", "muted detail-loading", "กำลังโหลดรายละเอียดสถานที่…");
     loading.setAttribute("role", "status");
     document.getElementById("detail-content").replaceChildren(loading);
     document.getElementById("attempts-table").replaceChildren();
-    document.getElementById("attempts-page").textContent = "Loading…";
+    document.getElementById("attempts-page").textContent = "กำลังโหลด…";
     document.getElementById("attempts-prev").disabled = true;
     document.getElementById("attempts-next").disabled = true;
     const dialog = document.getElementById("place-dialog");
@@ -798,7 +820,7 @@
           .eq("worker_id", place.worker_id).eq("osm_id", place.osm_id).maybeSingle();
         if (!isCurrent()) return false;
         place = resultOrThrow(latest);
-        if (!place) throw new Error("Place details are no longer available.");
+        if (!place) throw new Error("ไม่พบรายละเอียดสถานที่นี้แล้ว");
         detailPlace = place;
         detailPlaceLoaded = true;
       }
@@ -825,17 +847,17 @@
       const reviewed = place.google_proposal?.selection_method === "nearest_reviewed";
       const columns = el("div", "detail-columns");
       columns.append(
-        detailPanel("OSM source fields", place.source_record),
-        detailPanel(pendingReview ? "Suggested nearest match — awaiting review" :
-          reviewed ? "Reviewed nearest Google match" : "Latest successful Google proposal", place.google_proposal),
+        detailPanel("ข้อมูลต้นทาง OSM", place.source_record),
+        detailPanel(pendingReview ? "รายการที่ใกล้ที่สุดที่แนะนำ — รอตรวจทาน" :
+          reviewed ? "รายการ Google ที่ใกล้ที่สุดและตรวจทานแล้ว" : "ข้อเสนอ Google ที่สำเร็จล่าสุด", place.google_proposal),
       );
       const content = document.createDocumentFragment();
-      if (pendingReview) content.append(el("p", "muted", "This suggestion is excluded from exports until approved on the scraper server. Use review list to find its ID."));
-      content.append(columns, detailPanel("Latest candidates", place.candidates));
-      content.append(el("p", "muted", `Matching: ${place.matching_method || "—"} · Similarity: ${place.similarity ?? "—"} · Distance: ${place.distance_m ?? "—"} m · Review flag: ${place.review_flag ? "Yes" : "No"}`));
+      if (pendingReview) content.append(el("p", "muted", "รายการแนะนำนี้จะไม่ถูกรวมในการส่งออกจนกว่าจะอนุมัติบนเซิร์ฟเวอร์ Scraper ใช้รายการตรวจทานเพื่อค้นหา ID"));
+      content.append(columns, detailPanel("ตัวเลือกที่ตรงกันล่าสุด", place.candidates));
+      content.append(el("p", "muted", `วิธีจับคู่: ${place.matching_method || "—"} · ความคล้ายคลึง: ${place.similarity ?? "—"} · ระยะทาง: ${place.distance_m ?? "—"} ม. · ธงตรวจทาน: ${place.review_flag ? "มี" : "ไม่มี"}`));
       if (place.latest_error_code || place.latest_error_message) {
         const error = el("div", "panel");
-        error.append(el("strong", "", `Latest error ${place.latest_error_code || ""}`));
+        error.append(el("strong", "", `ข้อผิดพลาดล่าสุด ${place.latest_error_code || ""}`));
         error.append(el("p", "", place.latest_error_message || ""));
         content.append(error);
       }
@@ -856,8 +878,8 @@
       retry.hidden = true;
       document.getElementById("detail-content").replaceChildren(content);
       replaceTable(document.getElementById("attempts-table"), makeTable(
-        ["Completed", "Duration", "Status", "Outcome", "Match", "Latest error", "Evidence"], rows,
-        "Attempt history table", "No attempts have been reported for this place yet.",
+        ["เสร็จเมื่อ", "ระยะเวลา", "สถานะ", "ผลลัพธ์", "การจับคู่", "ข้อผิดพลาดล่าสุด", "หลักฐาน"], rows,
+        "ตารางประวัติการลองตรวจสอบ", "ยังไม่มีรายงานการลองตรวจสอบสำหรับสถานที่นี้",
       ));
       setPager("attempts", offset, attemptsTotal,
         () => { attemptsOffset = Math.max(0, offset - PAGE_SIZE); refreshDetail(); },
@@ -866,13 +888,13 @@
       return true;
     } catch (error) {
       if (isCurrent()) {
-        const message = error?.message || "Unable to load place details.";
+        const message = errorText(error, "โหลดรายละเอียดสถานที่ไม่สำเร็จ");
         document.getElementById("detail-error").textContent = message;
         retry.hidden = false;
         const loading = document.querySelector("#detail-content .detail-loading");
         if (loading) {
-          loading.textContent = "Unable to load place details. Try again.";
-          document.getElementById("attempts-page").textContent = "Unavailable";
+          loading.textContent = "โหลดรายละเอียดสถานที่ไม่สำเร็จ กรุณาลองอีกครั้ง";
+          document.getElementById("attempts-page").textContent = "ไม่พร้อมใช้งาน";
         }
         if (status === statusRequest) setError(message);
       }
@@ -888,7 +910,7 @@
   function lazyDisclosure({ key, loadKey, label, cache, load, format }) {
     const details = el("details");
     details.dataset.detailKey = key;
-    const summary = el("summary", "", "View");
+    const summary = el("summary", "", "ดูรายละเอียด");
     summary.dataset.focusKey = key;
     summary.setAttribute("aria-label", label);
     const content = el("div", "disclosure-content");
@@ -903,7 +925,7 @@
         content.removeAttribute("aria-busy");
         return;
       }
-      const loading = el("p", "muted", "Loading details…");
+      const loading = el("p", "muted", "กำลังโหลดรายละเอียด…");
       loading.setAttribute("role", "status");
       content.replaceChildren(loading);
       content.setAttribute("aria-busy", "true");
@@ -921,9 +943,9 @@
       } catch (error) {
         if (!details.isConnected || !details.open) return;
         content.removeAttribute("aria-busy");
-        const message = el("p", "field-error", error?.message || "Unable to load details.");
+        const message = el("p", "field-error", errorText(error, "โหลดรายละเอียดไม่สำเร็จ"));
         message.setAttribute("role", "alert");
-        const retry = el("button", "secondary", "Retry loading details");
+        const retry = el("button", "secondary", "ลองโหลดรายละเอียดอีกครั้ง");
         retry.type = "button";
         retry.addEventListener("click", () => {
           summary.focus({ preventScroll: true });
@@ -940,12 +962,12 @@
     const key = JSON.stringify([workerId, attempt.attempt_id]);
     return lazyDisclosure({
       key, loadKey: `attempt:${key}`, cache: attemptEvidence,
-      label: `View evidence for attempt completed ${formatDate(attempt.worker_completed_at)}`,
+      label: `ดูหลักฐานของการลองตรวจสอบที่เสร็จเมื่อ ${formatDate(attempt.worker_completed_at)}`,
       load: async () => {
         const result = await client.from("monitoring_attempts").select("candidates,proposal,errors")
           .eq("worker_id", workerId).eq("attempt_id", attempt.attempt_id).maybeSingle();
         const evidence = resultOrThrow(result);
-        if (!evidence) throw new Error("Attempt evidence is no longer available.");
+        if (!evidence) throw new Error("ไม่พบหลักฐานการลองตรวจสอบนี้แล้ว");
         return evidence;
       },
       format: (evidence) => ({
@@ -983,16 +1005,16 @@
     logsOffset = offset;
     logsTotal = Number(result.count || 0);
     const rows = events.map((event) => [
-      formatDate(event.received_at), pill(event.severity), event.event_type,
+      formatDate(event.received_at), pill(event.severity), eventLabel(event.event_type),
       event.worker_id.slice(0, 8), event.run_id || "—",
       { node: jsonDisclosure(event), className: "wrap" },
     ]);
     const filtered = workerId || severity || fromTime || toTime;
     const emptyMessage = filtered
-      ? "No events match the current filters. Adjust the filters or worker selection and try again."
-      : "No operational events have been received yet.";
+      ? "ไม่พบเหตุการณ์ที่ตรงกับตัวกรองปัจจุบัน ลองปรับตัวกรองหรือเลือกเวิร์กเกอร์อื่น"
+      : "ยังไม่ได้รับเหตุการณ์การทำงาน";
     replaceTable(document.getElementById("logs-table"), makeTable(
-      ["Received", "Severity", "Event", "Worker", "Run", "Details"], rows, "Operational logs table", emptyMessage,
+      ["เวลาที่ได้รับ", "ระดับ", "เหตุการณ์", "เวิร์กเกอร์", "รอบทำงาน", "รายละเอียด"], rows, "ตารางบันทึกการทำงาน", emptyMessage,
     ));
     setPager("logs", offset, logsTotal,
       () => { logsOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
@@ -1003,12 +1025,12 @@
     const key = event.event_id;
     return lazyDisclosure({
       key, loadKey: `event:${key}`, cache: eventDetails,
-      label: `View details for ${event.event_type} received ${formatDate(event.received_at)}`,
+      label: `ดูรายละเอียด ${eventLabel(event.event_type)} ที่ได้รับเมื่อ ${formatDate(event.received_at)}`,
       load: async () => {
         const result = await client.from("monitoring_operational_events").select("data")
           .eq("event_id", key).maybeSingle();
         const row = resultOrThrow(result);
-        if (!row) throw new Error("Log details are no longer available.");
+        if (!row) throw new Error("ไม่พบรายละเอียดบันทึกเหตุการณ์นี้แล้ว");
         return row.data ?? {};
       },
       format: (data) => data,
@@ -1022,8 +1044,8 @@
     const section = document.getElementById(`${view}-view`);
     section.setAttribute("aria-busy", "true");
     const placeholder = section.querySelector(".view-placeholder");
-    if (placeholder) placeholder.textContent = `Loading ${view}…`;
-    setLive("", "Updating…");
+    if (placeholder) placeholder.textContent = `กำลังโหลด${view === "overview" ? "ภาพรวม" : view === "places" ? "สถานที่" : "บันทึกเหตุการณ์"}…`;
+    setLive("", "กำลังอัปเดต…");
     const status = ++statusRequest;
     const isCurrent = () => request === viewRequest && !document.hidden && activeView === view;
     try {
@@ -1044,8 +1066,8 @@
       }
     } catch (error) {
       if (isCurrent() && status === statusRequest) {
-        if (placeholder) placeholder.textContent = `Unable to load ${view}. Select Refresh now to try again.`;
-        setError(error?.message || "Unable to load monitoring data.");
+        if (placeholder) placeholder.textContent = `โหลด${view === "overview" ? "ภาพรวม" : view === "places" ? "สถานที่" : "บันทึกเหตุการณ์"}ไม่สำเร็จ กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง`;
+        setError(errorText(error, "โหลดข้อมูลมอนิเตอร์ไม่สำเร็จ"));
       }
     } finally {
       if (request === viewRequest) section.removeAttribute("aria-busy");
@@ -1069,14 +1091,14 @@
     const view = activeView;
     const status = ++statusRequest;
     const isCurrent = () => request === workersRequest && !document.hidden && activeView === view;
-    setLive("", "Updating…");
+    setLive("", "กำลังอัปเดต…");
     try {
       if (view === "overview" || await refreshWorkers(isCurrent)) await refreshCurrent();
     } catch (error) {
       if (isCurrent() && status === statusRequest) {
         const placeholder = document.querySelector(`#${activeView}-view .view-placeholder`);
-        if (placeholder) placeholder.textContent = `Unable to load ${activeView}. Select Refresh now to try again.`;
-        setError(error?.message || "Unable to refresh data.");
+        if (placeholder) placeholder.textContent = `โหลด${activeView === "overview" ? "ภาพรวม" : activeView === "places" ? "สถานที่" : "บันทึกเหตุการณ์"}ไม่สำเร็จ กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง`;
+        setError(errorText(error, "รีเฟรชข้อมูลไม่สำเร็จ"));
       }
     }
   }
@@ -1118,12 +1140,12 @@
     if (!client || document.hidden) return;
     const request = ++manualRefresh;
     const announcement = document.getElementById("refresh-announcement");
-    announcement.textContent = "Refreshing dashboard…";
+    announcement.textContent = "กำลังรีเฟรชแดชบอร์ด…";
     await refreshAll();
     if (request !== manualRefresh || document.hidden) return;
     const live = document.getElementById("live-status");
-    announcement.textContent = live.classList.contains("ok") ? "Dashboard updated."
-      : live.classList.contains("warning") ? "Dashboard updated with some metrics unavailable." : "";
+    announcement.textContent = live.classList.contains("ok") ? "อัปเดตแดชบอร์ดแล้ว"
+      : live.classList.contains("warning") ? "อัปเดตแดชบอร์ดแล้ว แต่ข้อมูลบางรายการไม่พร้อมใช้งาน" : "";
   });
   const themeToggle = document.getElementById("theme-toggle");
   const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1133,7 +1155,7 @@
   }
   function updateThemeToggle() {
     const dark = isDarkTheme();
-    const label = dark ? "Switch to light theme" : "Switch to dark theme";
+    const label = dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด";
     themeToggle.setAttribute("aria-label", label);
     themeToggle.title = label;
     document.getElementById("theme-icon-moon").toggleAttribute("hidden", dark);
@@ -1211,13 +1233,13 @@
   });
 
   if (!window.supabase?.createClient) {
-    document.querySelector("#overview-view .view-placeholder").textContent = "Unable to load overview. Reload the page to retry.";
-    setError("Supabase browser library did not load.");
+    document.querySelector("#overview-view .view-placeholder").textContent = "โหลดภาพรวมไม่สำเร็จ โหลดหน้าเว็บอีกครั้งเพื่อลองใหม่";
+    setError("โหลดไลบรารี Supabase สำหรับเบราว์เซอร์ไม่สำเร็จ");
     return;
   }
   if (!config.supabaseUrl || !config.supabasePublishableKey) {
-    document.querySelector("#overview-view .view-placeholder").textContent = "Unable to load overview. Check the dashboard configuration and reload.";
-    setError("Copy config.example.js to config.js and add the Supabase URL and publishable key.");
+    document.querySelector("#overview-view .view-placeholder").textContent = "โหลดภาพรวมไม่สำเร็จ ตรวจสอบการตั้งค่าแดชบอร์ดแล้วโหลดหน้าเว็บอีกครั้ง";
+    setError("คัดลอก config.example.js เป็น config.js แล้วเพิ่ม Supabase URL และ publishable key");
     return;
   }
   // Read-only public access: the anon role is limited to SELECT by migration 0002.
