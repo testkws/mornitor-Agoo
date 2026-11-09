@@ -137,6 +137,7 @@ button.secondary:hover { filter: none; background: var(--surface-2); }
 }
 .icon-btn:hover { filter: none; background: var(--accent-soft); }
 .icon-btn svg[hidden] { display: none; }
+.icon-btn.lang-btn { font-size: .85rem; font-weight: 600; }
 .icon-btn.spin { animation: spin .7s linear; }
 @keyframes spin { to { transform: rotate(360deg); } }
 label { display: grid; gap: 5px; color: var(--muted); font-size: .72rem; font-weight: 700; }

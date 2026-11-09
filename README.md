@@ -26,6 +26,14 @@ configured. Anyone with the URL can read worker IDs, place evidence, and logs,
 so keep sensitive data out of event payloads. Worker credentials and ingestion
 stay closed to `anon`.
 
+## Language
+
+The dashboard is Thai by default. The **EN / ไทย** button in the header switches
+language; the choice is stored in `localStorage` (`lang`) and the page reloads.
+Thai is the source language: every string is passed through `t("ข้อความไทย")`
+and `i18n.js` holds the English catalog (static `index.html` text is translated
+from the same catalog). Add new UI text to that catalog as well.
+
 The UI uses nature-inspired moss green (`#687864`), ocean blue (`#31708E`),
 blue (`#5085A5`), pale sky blue (`#8FC1E3`), and cloud white (`#F7F9FB`).
 It follows the system light/dark preference and has a manual theme toggle

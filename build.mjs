@@ -22,7 +22,7 @@ if (!publicKey) {
 }
 const output = path.join(root, 'dist');
 await mkdir(output, { recursive: true });
-for (const name of ['index.html', 'styles.css', 'app.js']) {
+for (const name of ['index.html', 'styles.css', 'app.js', 'i18n.js']) {
   await copyFile(path.join(root, name), path.join(output, name));
 }
 await writeFile(path.join(output, 'config.js'),
