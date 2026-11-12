@@ -336,6 +336,9 @@ html[lang="th"] th { letter-spacing: normal; }
 .section-heading { margin: 0 0 20px; }
 .section-heading h2 { margin-bottom: 4px; font-size: 1.65rem; }
 .section-heading p { margin-bottom: 0; }
+.export-note, .export-status { margin: -8px 0 16px; color: var(--muted); font-size: .78rem; }
+.export-status:empty { display: none; }
+.export-status.error { color: var(--bad); }
 .filters { display: grid; grid-template-columns: minmax(190px, 2fr) repeat(3, minmax(115px, 1fr)) auto; align-items: end; gap: 12px; margin: 16px 0; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 #logs-view .filters { grid-template-columns: repeat(4, minmax(125px, 1fr)) auto; }
 .filter-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
@@ -391,6 +394,7 @@ summary { min-height: 44px; margin: -10px -6px; padding: 10px 6px; cursor: point
 @media (max-width: 700px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .overview-heading { align-items: start; flex-direction: column; gap: 14px; }
+  .place-heading { align-items: start; flex-direction: column; gap: 12px; }
   .charts-grid { grid-template-columns: 1fr; }
   .table-scroll-hint { display: block; position: sticky; left: 0; margin: 0; padding: 10px 15px; color: var(--muted); font-size: .75rem; }
 }

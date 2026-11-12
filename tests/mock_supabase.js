@@ -149,7 +149,7 @@
           kind = "workers";
           rows = state.workers;
         } else if (table === "monitoring_place_results") {
-          kind = "places";
+          kind = columns.includes("source_record,queue_status,outcome,google_proposal") ? "places-export" : "places";
           const text = search.toLowerCase();
           rows = state.places.filter((row) => matches(row, filters, ranges, choices) &&
             (!text || row.osm_id.toLowerCase().includes(text) || String(row.source_record?.name || "").toLowerCase().includes(text)));

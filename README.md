@@ -45,6 +45,104 @@ The worker selector applies across all sections. On Places and Logs, select
 that section while keeping the selected worker. Log date filters use the
 browser's local time. Tables can scroll horizontally on smaller screens.
 
+## Export place monitoring data
+
+On **Places**, select **Export monitoring CSV** to download the full monitoring
+records for the selected worker and applied place filters, across all pages.
+Apply edited filters before exporting. The button captures the worker and filters
+when clicked, so later changes do not alter an export already in progress. If
+no rows match, nothing is downloaded. If a request fails, the result count
+changes, or duplicate rows are detected, the export stops without downloading a
+partial file; retry it. Each page is a separate read, not a transaction: updates
+can still produce a mixed-time result, and changes that preserve the count may
+not be detected. Large exports are held in browser memory. Upload delays can
+also mean the monitoring data is behind the worker.
+
+This file is a **raw monitoring snapshot**, intended for a database staging
+table. It can contain pending, unmatched, failed, or unapproved suggestions,
+raw candidates and phone numbers that the scraper's eligibility checks would
+exclude or suppress. Do not treat `google_proposal` or `candidates` as accepted
+contact data. The file does not include the complete attempt history, logs, or
+worker records. The same OSM ID can appear for multiple workers.
+
+The dashboard CSV is **not** the `google-maps-standalone/v1` JSONL format used
+by `python -m server.manage google-maps import-results`. For that existing
+backend importer, generate `results.jsonl` on the scraper machine with
+`python -m google_scraper export results.jsonl`, then use the documented
+[preview and import workflow](../README.md#import-run-and-export). Monitoring
+snapshots do not contain all the information needed to reproduce its validation.
+
+### CSV structure
+
+The header uses the `public.monitoring_place_results` column names, in this
+order. There is one row per `(worker_id, osm_id)`.
+
+| Column | PostgreSQL type | Meaning |
+| --- | --- | --- |
+| `worker_id` | `uuid` | Worker that reported the place; part of the key. |
+| `osm_id` | `text` | OSM identity, e.g. `node/123`; part of the key. |
+| `source_record` | `jsonb` | Source place fields, typically name, coordinates, province, district and aliases. |
+| `queue_status` | `text` | Most recently reported queue state. |
+| `outcome` | `text`, nullable | Most recently reported result, e.g. `found`, `ambiguous` or `not_found`. |
+| `google_proposal` | `jsonb`, nullable | Latest proposal or pending suggestion; fields vary and are not necessarily approved. |
+| `candidates` | `jsonb` | Array of raw Google candidates; candidate fields vary. |
+| `matching_method` | `text`, nullable | Reported matching method. |
+| `similarity`, `distance_m` | `double precision`, nullable | Matching score and distance in metres. |
+| `review_flag` | `boolean` | Whether the reported result is flagged for review. |
+| `latest_error_code`, `latest_error_message` | `text`, nullable | Latest reported error, if any. |
+| `latest_attempt_id` | `uuid`, nullable | Most recently reported attempt ID; the attempt itself is not exported. |
+| `checked_at`, `worker_updated_at` | `timestamptz`, nullable | Worker-reported check and update times. |
+| `received_at` | `timestamptz` | Time Supabase received the latest snapshot. |
+| `last_sequence` | `bigint` | Latest worker event sequence applied to this row. |
+
+The file is UTF-8 CSV with a header and CRLF record endings. All non-null
+fields are quoted, quotes are doubled, and nested JSON values are serialized
+as JSON text inside their CSV fields. An unquoted empty field means SQL NULL;
+`""` means an empty string. PostgreSQL's default CSV NULL handling preserves
+this distinction. PostgREST represents both SQL NULL and a JSON `null` value as
+JSON null, so a JSON `null` in `google_proposal` is exported as SQL NULL.
+Strings are not modified for spreadsheet safety: do not open untrusted data in
+a spreadsheet that executes formulas. Leading `+` in phone numbers and other
+source characters are preserved for database import.
+
+Browser JSON parsing uses JavaScript numbers; integers outside the safe range
+cause an error instead of a download, while high-precision fractional JSON
+numbers may be rounded. If exact numeric precision or a transactionally
+consistent backup is required, export directly from the database instead.
+
+For example, in `psql`, create a staging table and load the downloaded file:
+
+```sql
+CREATE TABLE monitoring_places_stage (
+  worker_id uuid NOT NULL,
+  osm_id text NOT NULL,
+  source_record jsonb NOT NULL,
+  queue_status text NOT NULL,
+  outcome text,
+  google_proposal jsonb,
+  candidates jsonb NOT NULL,
+  matching_method text,
+  similarity double precision,
+  distance_m double precision,
+  review_flag boolean NOT NULL,
+  latest_error_code text,
+  latest_error_message text,
+  latest_attempt_id uuid,
+  checked_at timestamptz,
+  worker_updated_at timestamptz,
+  received_at timestamptz NOT NULL,
+  last_sequence bigint NOT NULL,
+  PRIMARY KEY (worker_id, osm_id)
+);
+\copy monitoring_places_stage FROM '/path/to/monitoring-places.csv' WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')
+```
+
+Replace the path with the downloaded filename. `\copy` reads from the machine
+running `psql`; it is a `psql` command, not SQL for the Supabase editor. Use an
+empty staging table or handle duplicate keys before importing the same data
+again. Validate and transform staged rows for the destination database's schema
+and acceptance rules.
+
 The visible dashboard refreshes every five minutes; the refresh button, filters,
 pagination, and worker selection update immediately. Polling pauses in hidden
 tabs. Place lists and collapsed log and attempt details transfer only their
@@ -93,8 +191,9 @@ each refresh.
 
 Places with a pending nearest-match suggestion show **Suggested nearest match —
 awaiting review** and the suggestion UUID in their details. These suggestions
-are not normal exports until approved from the scraper server; the dashboard
-remains read-only. Monitoring updates can lag while uploads are queued.
+are excluded from normal scraper exports until approved on the scraper server,
+but are included in the raw monitoring CSV. The dashboard remains read-only.
+Monitoring updates can lag while uploads are queued.
 
 Both environment values become public browser configuration. Never supply a
 worker token, Supabase secret key, or service-role key. The build rejects secret

@@ -4,6 +4,12 @@
   const PAGE_SIZE = 50;
   const POLL_INTERVAL = 5 * 60_000;
   const HEARTBEAT_WINDOW = 10 * 60_000;
+  // Match the monitoring table so the CSV can be loaded into a staging table.
+  const PLACE_EXPORT_FIELDS = [
+    "worker_id", "osm_id", "source_record", "queue_status", "outcome", "google_proposal", "candidates",
+    "matching_method", "similarity", "distance_m", "review_flag", "latest_error_code", "latest_error_message",
+    "latest_attempt_id", "checked_at", "worker_updated_at", "received_at", "last_sequence",
+  ];
   const { t } = I18N;
   I18N.translateStatic();
   const STATUS_LABELS = I18N.map({
@@ -706,13 +712,13 @@
     }
   }
 
-  async function renderPlaces(isCurrent) {
-    const { query, outcome, queueStatus, review } = placeFilters;
+  async function fetchPlacesPage(filters, workerId, offset, full = false) {
+    const { query, outcome, queueStatus, review } = filters;
     const params = {
       p_query: query,
       p_outcome: outcome,
       p_queue_status: queueStatus,
-      p_worker_id: activeWorker || null,
+      p_worker_id: workerId || null,
       p_review_flag: review,
       p_limit: PAGE_SIZE,
     };
@@ -721,24 +727,27 @@
     // conservative set of ordinary search characters.
     const search = Array.from(query).slice(0, 200).join("");
     const useRpc = !/^[\p{L}\p{M}\p{N}\s/-]*$/u.test(search);
-    const fetchPage = async (offset) => {
-      if (useRpc) return client.rpc("monitoring_places_page", { ...params, p_offset: offset });
-      let request = client.from("monitoring_place_results")
-        .select("worker_id,osm_id,name:source_record->>name,outcome,queue_status,review_flag,latest_error_code,latest_attempt_id", { count: "exact" })
-        .order("osm_id", { ascending: true })
-        .order("worker_id", { ascending: true })
-        .range(offset, offset + PAGE_SIZE - 1);
-      if (params.p_worker_id) request = request.eq("worker_id", params.p_worker_id);
-      if (outcome) request = request.eq("outcome", outcome);
-      if (queueStatus) request = request.eq("queue_status", queueStatus);
-      if (review !== null) request = request.eq("review_flag", review);
-      if (search) request = request.or(`osm_id.ilike.*${search}*,source_record->>name.ilike.*${search}*`);
-      const result = await request;
-      if (result.error) return result;
-      return { data: { total: result.count, rows: (result.data || []).map((place) => ({
-        ...place, source_record: { name: place.name },
-      })) }, error: null };
-    };
+    if (useRpc) return client.rpc("monitoring_places_page", { ...params, p_offset: offset });
+    let request = client.from("monitoring_place_results")
+      .select(full ? PLACE_EXPORT_FIELDS.join(",") : "worker_id,osm_id,name:source_record->>name,outcome,queue_status,review_flag,latest_error_code,latest_attempt_id", { count: "exact" })
+      .order("osm_id", { ascending: true })
+      .order("worker_id", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (params.p_worker_id) request = request.eq("worker_id", params.p_worker_id);
+    if (outcome) request = request.eq("outcome", outcome);
+    if (queueStatus) request = request.eq("queue_status", queueStatus);
+    if (review !== null) request = request.eq("review_flag", review);
+    if (search) request = request.or(`osm_id.ilike.*${search}*,source_record->>name.ilike.*${search}*`);
+    const result = await request;
+    if (result.error) return result;
+    return { data: { total: result.count, rows: full ? result.data : (result.data || []).map((place) => ({
+      ...place, source_record: { name: place.name },
+    })) }, error: null };
+  }
+
+  async function renderPlaces(isCurrent) {
+    const { query, outcome, queueStatus, review } = placeFilters;
+    const fetchPage = (offset) => fetchPlacesPage(placeFilters, activeWorker, offset);
     let offset = placesOffset;
     let result = await fetchPage(offset);
     if (!isCurrent()) return;
@@ -771,6 +780,74 @@
       () => { placesOffset = Math.max(0, offset - PAGE_SIZE); refreshCurrent(); },
       () => { placesOffset = offset + PAGE_SIZE; refreshCurrent(); });
     return renderPlaceTimes(places, JSON.stringify([activeWorker, placeFilters, offset]), isCurrent);
+  }
+
+  function csvValue(value) {
+    // Bare empty fields are SQL NULL in PostgreSQL CSV; quoted empty fields are empty strings.
+    if (value == null) return "";
+    const checkPrecision = (item) => {
+      if (typeof item === "number" && Number.isInteger(item) && !Number.isSafeInteger(item)) {
+        throw new Error(t("ตัวเลขบางรายการมีขนาดเกินความแม่นยำของเบราว์เซอร์ โปรดส่งออกจากฐานข้อมูลโดยตรง"));
+      }
+      if (item && typeof item === "object") Object.values(item).forEach(checkPrecision);
+    };
+    checkPrecision(value);
+    const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  async function exportPlaces() {
+    if (!client) return;
+    const button = document.getElementById("export-places");
+    if (button.disabled) return;
+    const status = document.getElementById("place-export-status");
+    const filters = { ...placeFilters };
+    const workerId = activeWorker;
+    const parts = [`${PLACE_EXPORT_FIELDS.join(",")}\r\n`];
+    const keys = new Set();
+    let total = null;
+    button.disabled = true;
+    status.classList.remove("error");
+    status.textContent = t("กำลังรวบรวมข้อมูล {n} จาก {total} รายการ…", { n: 0, total: "…" });
+    try {
+      for (let offset = 0; total === null || offset < total; offset += PAGE_SIZE) {
+        const data = resultOrThrow(await fetchPlacesPage(filters, workerId, offset, true));
+        const pageTotal = data?.total;
+        const rows = data?.rows;
+        if (!Number.isSafeInteger(pageTotal) || pageTotal < 0 || !Array.isArray(rows) ||
+            (total !== null && pageTotal !== total) || rows.length !== Math.min(PAGE_SIZE, Math.max(0, pageTotal - offset))) {
+          throw new Error(t("ข้อมูลเปลี่ยนระหว่างส่งออก กรุณาลองอีกครั้ง"));
+        }
+        total = pageTotal;
+        rows.forEach((place) => {
+          const key = JSON.stringify([place.worker_id, place.osm_id]);
+          if (!place.worker_id || !place.osm_id || keys.has(key)) {
+            throw new Error(t("ข้อมูลเปลี่ยนระหว่างส่งออก กรุณาลองอีกครั้ง"));
+          }
+          keys.add(key);
+          parts.push(`${PLACE_EXPORT_FIELDS.map((field) => csvValue(place[field])).join(",")}\r\n`);
+        });
+        status.textContent = t("กำลังรวบรวมข้อมูล {n} จาก {total} รายการ…", { n: formatCount(keys.size), total: formatCount(total) });
+      }
+      if (!total) {
+        status.textContent = t("ไม่พบข้อมูลที่ตรงกับตัวกรองที่ใช้แล้ว จึงไม่มีไฟล์ให้ดาวน์โหลด");
+        return;
+      }
+      const url = URL.createObjectURL(new Blob(parts, { type: "text/csv;charset=utf-8" }));
+      const link = el("a");
+      link.href = url;
+      link.download = `monitoring-places-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      status.textContent = t("ดาวน์โหลดข้อมูลมอนิเตอร์ {n} รายการแล้ว", { n: formatCount(total) });
+    } catch (error) {
+      status.classList.add("error");
+      status.textContent = errorText(error, t("ส่งออกข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง"));
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function openDetail(place) {
@@ -861,7 +938,7 @@
           reviewed ? t("รายการ Google ที่ใกล้ที่สุดและตรวจทานแล้ว") : t("ข้อเสนอ Google ที่สำเร็จล่าสุด"), place.google_proposal),
       );
       const content = document.createDocumentFragment();
-      if (pendingReview) content.append(el("p", "muted", t("รายการแนะนำนี้จะไม่ถูกรวมในการส่งออกจนกว่าจะอนุมัติบนเซิร์ฟเวอร์ Scraper ใช้รายการตรวจทานเพื่อค้นหา ID")));
+      if (pendingReview) content.append(el("p", "muted", t("รายการแนะนำนี้จะไม่ถูกรวมในการส่งออกผลลัพธ์ปกติจนกว่าจะอนุมัติบนเซิร์ฟเวอร์ Scraper แต่จะอยู่ในข้อมูลมอนิเตอร์ดิบ ใช้รายการตรวจทานเพื่อค้นหา ID")));
       content.append(columns, detailPanel(t("ตัวเลือกที่ตรงกันล่าสุด"), place.candidates));
       content.append(el("p", "muted", t("วิธีจับคู่: {method} · ความคล้ายคลึง: {similarity} · ระยะทาง: {distance} ม. · เครื่องหมายตรวจทาน: {flag}", { method: place.matching_method || "—", similarity: place.similarity ?? "—", distance: place.distance_m ?? "—", flag: place.review_flag ? t("มี") : t("ไม่มี") })));
       if (place.latest_error_code || place.latest_error_message) {
@@ -1194,6 +1271,7 @@
     refreshCurrent();
   });
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
+  document.getElementById("export-places").addEventListener("click", exportPlaces);
   document.getElementById("places-filters").addEventListener("submit", (event) => {
     event.preventDefault();
     applyPlaceFilters();
@@ -1262,5 +1340,6 @@
   client = window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
+  document.getElementById("export-places").disabled = false;
   startApp();
 })();

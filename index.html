@@ -47,7 +47,9 @@
     <p id="stale-note" class="stale-note" hidden>ข้อมูลบางส่วนอาจไม่เป็นปัจจุบัน กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง</p>
     <section id="overview-view" class="view"><p class="view-placeholder" role="status">กำลังโหลดภาพรวม…</p></section>
     <section id="places-view" class="view" hidden>
-      <div class="section-heading"><div><h2>สถานที่</h2><p class="muted">หลักฐานที่รวบรวมได้ แยกตามสถานที่ใน OSM</p></div></div>
+      <div class="section-heading place-heading"><div><h2>สถานที่</h2><p class="muted">หลักฐานที่รวบรวมได้ แยกตามสถานที่ใน OSM</p></div><button id="export-places" class="secondary" type="button" disabled>ส่งออกข้อมูลมอนิเตอร์เป็น CSV</button></div>
+      <p class="export-note">ส่งออกทุกหน้าตามเวิร์กเกอร์และตัวกรองที่ใช้แล้ว เป็นข้อมูลมอนิเตอร์ดิบที่อาจมีรายการรอตรวจทาน</p>
+      <p id="place-export-status" class="export-status" role="status" aria-live="polite"></p>
       <form id="places-filters" class="filters" aria-label="ตัวกรองสถานที่">
         <label>ค้นหา<input id="place-query" type="search" placeholder="ชื่อหรือ OSM ID"></label>
         <label>ผลลัพธ์<select id="place-outcome"><option value="">ผลลัพธ์ทั้งหมด</option><option value="found">พบสถานที่</option><option value="found_no_phone">พบสถานที่ (ไม่มีเบอร์โทร)</option><option value="not_found">ไม่พบสถานที่</option><option value="ambiguous">ผลลัพธ์ไม่ชัดเจน</option></select></label>

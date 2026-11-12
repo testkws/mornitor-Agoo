@@ -1,3 +1,6 @@
+import csv
+import io
+import json
 import re
 from pathlib import Path
 
@@ -13,6 +16,7 @@ HTML = re.sub(
     flags=re.IGNORECASE | re.DOTALL,
 )
 APP = (ROOT / "app.js").read_text()
+I18N = (ROOT / "i18n.js").read_text()
 MOCK = (ROOT / "tests" / "mock_supabase.js").read_text()
 STYLES = (ROOT / "styles.css").read_text()
 
@@ -25,12 +29,20 @@ def browser():
         instance.close()
 
 
+def load_test_page(instance, lang="en"):
+    instance.route("**/*", lambda route: route.abort())
+    instance.route("https://dashboard.test/", lambda route: route.fulfill(content_type="text/html", body=""))
+    instance.goto("https://dashboard.test/")
+    instance.evaluate("lang => localStorage.setItem('lang', lang)", lang)
+    instance.set_content(HTML)
+    instance.add_style_tag(content=STYLES)
+    instance.add_script_tag(content=I18N)
+
+
 @pytest.fixture
 def page(browser):
     instance = browser.new_page()
-    instance.route("**/*", lambda route: route.abort())
-    instance.set_content(HTML)
-    instance.add_style_tag(content=STYLES)
+    load_test_page(instance)
     instance.add_script_tag(content=MOCK)
     instance.add_script_tag(content=APP)
     expect(instance.locator("#live-text")).to_contain_text("Updated")
@@ -207,7 +219,7 @@ def test_resume_state_does_not_present_historical_pause_as_current(page):
     page.locator("#refresh").click()
     expect(page.get_by_text("Queue resumed", exact=True)).to_be_visible()
     expect(page.get_by_text("Last run ended paused: BLOCKED", exact=True)).to_have_count(0)
-    expect(page.get_by_text("Last reported exit: paused · BLOCKED", exact=True)).to_be_visible()
+    expect(page.get_by_text("Last reported exit: Paused · BLOCKED", exact=True)).to_be_visible()
     expect(metric(page, "workers")).to_contain_text("0 last reported paused")
     panel = page.locator(".worker-panel").filter(has_text="Worker B")
     expect(panel).to_contain_text("7 / —")
@@ -227,7 +239,7 @@ def test_exit_snapshot_displays_stopped_runner_and_latest_usage(page):
     panel = page.locator(".worker-panel").filter(has_text="Worker A")
     expect(panel).to_contain_text("Runner stopped")
     expect(panel).to_contain_text("8 / 500")
-    expect(panel).to_contain_text("Last reported exit: no_due_work · No lookup is currently due")
+    expect(panel).to_contain_text("Last reported exit: No work due · No lookup is currently due")
 
 
 def test_safety_counts_use_latest_run_exit_or_heartbeat_sequence(page):
@@ -241,7 +253,7 @@ def test_safety_counts_use_latest_run_exit_or_heartbeat_sequence(page):
     page.locator("#refresh").click()
     panel = page.locator(".worker-panel").filter(has_text="Worker A")
     expect(panel).to_contain_text("Temporary errors: 3 / 3 recent attempts · 3 consecutive")
-    expect(panel).to_contain_text("Last reported exit: paused · TEMPORARY_ERRORS")
+    expect(panel).to_contain_text("Last reported exit: Paused · TEMPORARY_ERRORS")
 
     page.evaluate("""() => {
       const state = window.monitoringTest.state.workers[0].current_state;
@@ -366,18 +378,19 @@ def test_header_controls_are_aligned(page, width):
     page.set_viewport_size({"width": width, "height": 900})
     select = page.locator("#active-worker").bounding_box()
     refresh = page.locator("#refresh").bounding_box()
+    language = page.locator("#lang-toggle").bounding_box()
     theme = page.locator("#theme-toggle").bounding_box()
     status = page.locator("#live-status").bounding_box()
-    assert select and refresh and theme and status
-    for button in (refresh, theme):
+    assert select and refresh and language and theme and status
+    for button in (refresh, language, theme):
         assert abs(button["y"] - select["y"]) <= 1
         assert abs(button["height"] - select["height"]) <= 1
         assert button["width"] >= 44 and button["height"] >= 44
     assert select["x"] + select["width"] <= refresh["x"]
-    assert refresh["x"] + refresh["width"] <= theme["x"]
+    assert refresh["x"] + refresh["width"] <= language["x"]
+    assert language["x"] + language["width"] <= theme["x"]
     assert theme["x"] + theme["width"] <= width
-    if width > 480:
-        assert abs((status["y"] + status["height"] / 2) - (select["y"] + select["height"] / 2)) <= 1
+    if abs((status["y"] + status["height"] / 2) - (select["y"] + select["height"] / 2)) <= 1:
         assert status["x"] + status["width"] <= select["x"]
     else:
         assert status["y"] + status["height"] < select["y"]
@@ -430,6 +443,8 @@ def test_manual_theme_choice_survives_reload(browser):
             route.fulfill(content_type="text/css", body=STYLES)
         elif url == "https://dashboard.test/config.js":
             route.fulfill(content_type="text/javascript", body="")
+        elif url == "https://dashboard.test/i18n.js":
+            route.fulfill(content_type="text/javascript", body=I18N)
         elif url.startswith("https://cdn.jsdelivr.net/"):
             route.fulfill(content_type="text/javascript", body=MOCK)
         elif url == "https://dashboard.test/app.js":
@@ -437,6 +452,7 @@ def test_manual_theme_choice_survives_reload(browser):
         else:
             route.abort()
 
+    page.add_init_script("localStorage.setItem('lang', 'en')")
     page.route("**/*", respond)
     page.goto("https://dashboard.test/")
     expect(page.locator("#live-text")).to_contain_text("Updated")
@@ -605,9 +621,7 @@ def test_worker_picker_uses_theme_and_supports_keyboard(page, theme):
 
 def test_touch_device_keeps_native_worker_picker(browser):
     page = browser.new_page(viewport={"width": 375, "height": 900}, is_mobile=True, has_touch=True)
-    page.route("**/*", lambda route: route.abort())
-    page.set_content(HTML)
-    page.add_style_tag(content=STYLES)
+    load_test_page(page)
     page.add_script_tag(content=MOCK)
     page.add_script_tag(content=APP)
     expect(page.locator("#live-text")).to_contain_text("Updated")
@@ -708,7 +722,7 @@ def test_place_loading_failure_is_visible_and_recoverable(page):
     expect(page.locator("#live-text")).to_have_text("Updating…")
     expect(page.locator("#places-table")).to_contain_text("Loading places…")
     finish(page, request_id, "Places unavailable")
-    expect(page.locator("#global-error")).to_have_text("Places unavailable")
+    expect(page.locator("#global-error")).to_contain_text("Places unavailable")
     expect(page.locator("#stale-note")).to_be_hidden()
     expect(page.locator("#places-table")).to_contain_text("Unable to load places")
     expect(page.locator("#places-view")).not_to_have_attribute("aria-busy", "true")
@@ -732,8 +746,7 @@ def test_manual_refresh_announces_progress_without_poll_announcements(page):
 
 def test_missing_library_replaces_initial_loading_message(browser):
     page = browser.new_page()
-    page.route("**/*", lambda route: route.abort())
-    page.set_content(HTML)
+    load_test_page(page)
     page.add_script_tag(content=APP)
     expect(page.locator("#global-error")).to_have_text("Supabase browser library did not load.")
     expect(page.locator("#overview-view")).to_contain_text("Unable to load overview. Reload the page to retry.")
@@ -785,7 +798,8 @@ def test_pending_nearest_match_is_labelled_and_requires_server_review(page):
     page.get_by_role("button", name="Place 000", exact=True).click()
     dialog = page.get_by_role("dialog", name=re.compile("Place 000"))
     expect(dialog).to_contain_text("Suggested nearest match — awaiting review")
-    expect(dialog).to_contain_text("excluded from exports until approved")
+    expect(dialog).to_contain_text("excluded from normal scraper exports until approved")
+    expect(dialog).to_contain_text("included in raw monitoring data")
     expect(dialog).to_contain_text("example-review-id")
     expect(dialog.get_by_role("button", name=re.compile("approve", re.IGNORECASE))).to_have_count(0)
 
@@ -922,7 +936,7 @@ def test_current_error_is_reported_and_next_success_clears_it(page):
     hold(page, "places")
     page.locator("#place-search").click()
     finish(page, pending(page, "places"), "Current search failed")
-    expect(page.locator("#global-error")).to_have_text("Current search failed")
+    expect(page.locator("#global-error")).to_contain_text("Current search failed")
     expect(page.locator("#stale-note")).to_contain_text("may be out of date")
     expect(page.locator("#stale-note")).to_contain_text("Last updated")
     expect(page.locator("#stale-note")).to_be_visible()
@@ -944,9 +958,9 @@ def test_old_success_cannot_clear_newer_error(page):
     page.wait_for_function("window.monitoringTest.pending().length === 2")
     new_request = page.evaluate("window.monitoringTest.pending().at(-1).id")
     finish(page, new_request, "New search failed")
-    expect(page.locator("#global-error")).to_have_text("New search failed")
+    expect(page.locator("#global-error")).to_contain_text("New search failed")
     finish(page, old_request)
-    expect(page.locator("#global-error")).to_have_text("New search failed")
+    expect(page.locator("#global-error")).to_contain_text("New search failed")
 
 
 def test_switching_views_ignores_old_request_failure(page):
@@ -1089,7 +1103,7 @@ def test_current_detail_error_is_visible_inside_dialog(page):
     hold(page, "attempts")
     page.get_by_role("button", name="Place 000", exact=True).click()
     finish(page, pending(page, "attempts"), "Attempt history unavailable")
-    expect(page.locator("#detail-error")).to_have_text("Attempt history unavailable")
+    expect(page.locator("#detail-error")).to_contain_text("Attempt history unavailable")
     expect(page.locator("#detail-content")).to_contain_text("Try again")
     expect(page.locator("#attempts-page")).to_have_text("Unavailable")
     hold(page, "attempts")
@@ -1147,7 +1161,7 @@ def test_overview_reuses_workers_and_polls_every_five_minutes(page):
     page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).length === 10")
     requests = page.evaluate("window.monitoringTest.state.requests")
     assert not any(request["kind"] == "workers" for request in requests)
-    expect(page.locator(".nav-meta")).to_contain_text("5 MIN")
+    expect(page.locator(".nav-meta")).to_contain_text("5 min")
 
 
 def test_ten_minute_heartbeat_boundary(page):
@@ -1217,7 +1231,7 @@ def test_place_details_load_on_open_and_retry(page):
     request_id = pending(page, "place-detail")
     expect(page.locator("#detail-content")).to_contain_text("Loading place details")
     finish(page, request_id, "Place details unavailable")
-    expect(page.locator("#detail-error")).to_have_text("Place details unavailable")
+    expect(page.locator("#detail-error")).to_contain_text("Place details unavailable")
     page.locator("#detail-retry").click()
     expect(page.locator("#detail-content")).to_contain_text("Detailed proposal")
     expect(page.locator("#detail-content")).to_contain_text("Detailed candidate")
@@ -1246,7 +1260,7 @@ def test_log_details_are_lazy_retried_and_cached(page):
     request_id = pending(page, "log-detail")
     expect(details).to_contain_text("Loading details")
     finish(page, request_id, "Log detail unavailable")
-    expect(details.get_by_role("alert")).to_have_text("Log detail unavailable")
+    expect(details.get_by_role("alert")).to_contain_text("Log detail unavailable")
     details.get_by_role("button", name="Retry loading details").click()
     expect(details.locator("summary")).to_be_focused()
     expect(details.locator("pre")).to_contain_text("log evidence")
@@ -1492,3 +1506,181 @@ def test_place_time_chart_handles_long_names_and_large_text(page):
     chart = page.get_by_role("region", name="Inspection time by place")
     expect(chart.locator(".place-time-label").first).to_contain_text("Place-")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_export_csv_contains_full_filtered_records_from_every_page(page):
+    page.evaluate("""() => {
+      const row = window.monitoringTest.state.places[0];
+      row.source_record = {name: 'ร้าน Café, "North"\\n2nd floor', lat: 13.75, lon: 100.5};
+      row.google_proposal = {phone: '+66812345678', address: 'Line 1\\nLine 2'};
+      row.candidates = [{title: '=untrusted', phoneNumber: '+66812345678'}];
+      row.latest_error_code = null;
+      row.latest_error_message = '';
+      row.checked_at = '2026-11-03T00:00:00Z';
+      row.received_at = '2026-11-03T00:01:00Z';
+      row.last_sequence = 123;
+    }""")
+    show(page, "places")
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerA"))
+    expect(page.locator("#places-page")).to_contain_text("101 rows")
+    with page.expect_download() as event:
+        page.locator("#export-places").click()
+    download = event.value
+    assert re.fullmatch(r"monitoring-places-.*\.csv", download.suggested_filename)
+    raw = download.path().read_bytes().decode("utf-8")
+    assert "\r\n" in raw
+    assert ',,"",' in raw  # SQL NULL and empty string stay distinct for PostgreSQL COPY.
+    rows = list(csv.DictReader(io.StringIO(raw, newline="")))
+    assert len(rows) == 101
+    assert list(rows[0]) == [
+        "worker_id", "osm_id", "source_record", "queue_status", "outcome", "google_proposal", "candidates",
+        "matching_method", "similarity", "distance_m", "review_flag", "latest_error_code", "latest_error_message",
+        "latest_attempt_id", "checked_at", "worker_updated_at", "received_at", "last_sequence",
+    ]
+    assert json.loads(rows[0]["source_record"])["name"] == 'ร้าน Café, "North"\n2nd floor'
+    assert json.loads(rows[0]["google_proposal"]) == {"phone": "+66812345678", "address": "Line 1\nLine 2"}
+    assert json.loads(rows[0]["candidates"])[0]["title"] == "=untrusted"
+    assert rows[0]["review_flag"] == "false"
+    assert rows[0]["last_sequence"] == "123"
+    worker_a = page.evaluate("window.monitoringTest.state.workerA")
+    assert all(row["worker_id"] == worker_a for row in rows)
+    assert request_offsets(page, "places-export") == [0, 50, 100]
+    expect(page.locator("#place-export-status")).to_contain_text("Downloaded 101 monitoring rows")
+
+
+def test_export_uses_applied_special_search_and_includes_review_state(page):
+    page.evaluate("""() => {
+      const row = window.monitoringTest.state.places[0];
+      row.source_record.name = 'Café (North)';
+      row.outcome = 'ambiguous';
+      row.review_flag = true;
+      row.google_proposal = {selection_method: 'nearest_suggestion', review_status: 'pending'};
+    }""")
+    show(page, "places")
+    page.locator("#place-query").fill("Café (North)")
+    page.locator("#place-review").select_option("true")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("1 rows")
+    page.locator("#place-query").fill("unapplied edit")
+    with page.expect_download() as event:
+        page.locator("#export-places").click()
+    rows = list(csv.DictReader(io.StringIO(event.value.path().read_text(encoding="utf-8"))))
+    assert len(rows) == 1
+    assert rows[0]["osm_id"] == "node/000"
+    assert rows[0]["review_flag"] == "true"
+    assert json.loads(rows[0]["google_proposal"])["review_status"] == "pending"
+    request = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'places').at(-1)")
+    assert request["params"]["via"] == "rpc"
+    assert request["params"]["p_query"] == "Café (North)"
+
+
+def test_export_special_search_reads_every_rpc_page(page):
+    show(page, "places")
+    page.locator("#place-query").fill("%")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("102 rows")
+    with page.expect_download() as event:
+        page.locator("#export-places").click()
+    rows = list(csv.DictReader(io.StringIO(event.value.path().read_text(encoding="utf-8"))))
+    assert len(rows) == 102
+    offsets = page.evaluate("""() => window.monitoringTest.state.requests
+      .filter(r => r.kind === 'places' && r.params.p_query === '%' && r.params.via === 'rpc')
+      .map(r => r.params.p_offset)""")
+    assert offsets[-3:] == [0, 50, 100]
+
+
+def test_export_freezes_worker_and_filters_while_downloading(page):
+    show(page, "places")
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerA"))
+    expect(page.locator("#places-page")).to_contain_text("101 rows")
+    hold(page, "places-export")
+    page.locator("#export-places").click()
+    first = pending(page, "places-export")
+    expect(page.locator("#export-places")).to_be_disabled()
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
+    page.locator("#place-query").fill("Worker B")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("1 rows")
+    with page.expect_download() as event:
+        finish(page, first)
+    rows = list(csv.DictReader(io.StringIO(event.value.path().read_text(encoding="utf-8"))))
+    assert len(rows) == 101
+    worker_a = page.evaluate("window.monitoringTest.state.workerA")
+    assert all(row["worker_id"] == worker_a for row in rows)
+    expect(page.locator("#export-places")).to_be_enabled()
+
+
+def test_export_failure_and_changed_data_do_not_download_partial_file(page):
+    show(page, "places")
+    downloads = []
+    page.on("download", lambda download: downloads.append(download))
+    hold(page, "places-export")
+    page.locator("#export-places").click()
+    first = pending(page, "places-export")
+    hold(page, "places-export")
+    finish(page, first)
+    second = pending(page, "places-export")
+    finish(page, second, "network failure")
+    expect(page.locator("#place-export-status")).to_contain_text("Export failed")
+    expect(page.locator("#place-export-status")).to_contain_text("network failure")
+    expect(page.locator("#export-places")).to_be_enabled()
+    assert not downloads
+
+    hold(page, "places-export")
+    page.locator("#export-places").click()
+    first = pending(page, "places-export")
+    page.evaluate("window.monitoringTest.state.places.pop()")
+    finish(page, first)
+    expect(page.locator("#place-export-status")).to_contain_text("results changed during export")
+    assert not downloads
+
+
+def test_export_detects_duplicate_rows_when_count_is_unchanged(page):
+    show(page, "places")
+    downloads = []
+    page.on("download", lambda download: downloads.append(download))
+    hold(page, "places-export")
+    page.locator("#export-places").click()
+    first = pending(page, "places-export")
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      state.places.unshift({...state.places[0], osm_id: 'node/new'});
+      state.places.pop();
+    }""")
+    finish(page, first)
+    expect(page.locator("#place-export-status")).to_contain_text("results changed during export")
+    assert not downloads
+
+
+def test_export_empty_and_unsafe_numbers_do_not_download(page):
+    show(page, "places")
+    downloads = []
+    page.on("download", lambda download: downloads.append(download))
+    page.locator("#place-query").fill("no such place")
+    page.locator("#place-search").click()
+    expect(page.locator("#places-page")).to_contain_text("0 rows")
+    page.locator("#export-places").click()
+    expect(page.locator("#place-export-status")).to_contain_text("No rows match")
+    page.locator("#place-reset").click()
+    page.evaluate("window.monitoringTest.state.places[0].last_sequence = 9007199254740992")
+    page.locator("#export-places").click()
+    expect(page.locator("#place-export-status")).to_contain_text("exceeds browser precision")
+    expect(page.locator("#export-places")).to_be_enabled()
+    assert not downloads
+
+
+def test_export_is_available_in_thai_on_a_small_screen(browser):
+    page = browser.new_page(viewport={"width": 360, "height": 900})
+    load_test_page(page, lang="th")
+    page.add_script_tag(content=MOCK)
+    page.add_script_tag(content=APP)
+    expect(page.locator("#live-text")).to_contain_text("อัปเดตแล้ว")
+    show(page, "places")
+    button = page.locator("#export-places")
+    expect(button).to_have_text("ส่งออกข้อมูลมอนิเตอร์เป็น CSV")
+    expect(button).to_be_enabled()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    with page.expect_download():
+        button.click()
+    expect(page.locator("#place-export-status")).to_contain_text("ดาวน์โหลดข้อมูลมอนิเตอร์")
+    page.close()
