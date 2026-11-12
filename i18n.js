@@ -19,7 +19,7 @@
     // Static page text (index.html)
     "มอนิเตอร์ Scraper": "Scraper Monitor",
     "ข้ามไปยังเนื้อหาแดชบอร์ด": "Skip to dashboard content",
-    "Google Maps / การทำงาน": "Google Maps / Operations",
+
     "รีเฟรชอัตโนมัติทุก 5 นาที": "Auto-refreshes every 5 minutes",
     "กำลังเชื่อมต่อ…": "Connecting…",
     "เวิร์กเกอร์": "Worker",
@@ -27,6 +27,9 @@
     "เปลี่ยนเป็นธีมมืด": "Switch to dark theme", "เปลี่ยนเป็นธีมสว่าง": "Switch to light theme",
     "ส่วนต่าง ๆ ของแดชบอร์ด": "Dashboard sections",
     "ภาพรวม": "Overview", "สถานที่": "Places", "บันทึกเหตุการณ์": "Logs",
+    "ตัวกรองแดชบอร์ด": "Dashboard filters", "ช่วงวันที่": "Date range",
+    "ช่วงก่อนหน้า": "Previous period", "ช่วงถัดไป": "Next period",
+    "ช่วงเวลา": "Period", "24 ชั่วโมง": "24 hours", "7 วัน": "7 days", "30 วัน": "30 days",
     "รีเฟรชอัตโนมัติ": "Auto refresh", "5 นาที": "5 min",
     "ข้อมูลบางส่วนอาจไม่เป็นปัจจุบัน กดรีเฟรชตอนนี้เพื่อลองอีกครั้ง": "Some displayed information may be out of date. Use Refresh now to retry.",
     "กำลังโหลดภาพรวม…": "Loading overview…",
@@ -73,40 +76,62 @@
     "ไม่มีข้อมูลจำนวนครั้ง": "Count unavailable",
     "ไม่มีการลองตรวจสอบที่เสร็จแล้ว": "No completed attempts",
     "{a} จาก {b} ครั้ง": "{a} of {b} attempts",
-    "ผลการลองตรวจสอบ": "Attempt results",
-    "การลองตรวจสอบที่เสร็จแล้ว · 24 ชั่วโมงล่าสุด": "Completed attempts · last 24 hours",
-    "ไม่มีข้อมูลจำนวนครั้ง ระบบจะลองใหม่อัตโนมัติ": "Attempt counts are unavailable. Retrying automatically.",
-    "ไม่มีการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงที่ผ่านมา": "No completed attempts in the last 24 hours.",
-    "เสร็จแล้ว": "completed", "จับคู่ได้": "Matched", "ผลลัพธ์อื่น": "Other results",
-    "ผลที่จับคู่ได้รวมทั้งรายการที่มีและไม่มีเบอร์โทร": "Matches include results with or without a phone number.",
+    "จับคู่ได้": "Matched",
     "ภาพรวมคิว": "Queue snapshot",
-    "จำนวนล่าสุดที่อัปโหลด · ปรับสเกลตามกลุ่มที่มีจำนวนมากที่สุด": "Latest uploaded counts · scaled to the largest group",
+    "ภาพสถานะล่าสุดที่อัปโหลด ไม่ขึ้นกับช่วงวันที่": "Latest uploaded snapshot, whatever the date range",
+    "ที่อัตราของช่วงนี้ (ประมาณ {pace} ครั้งต่อวัน) รายการที่รอดำเนินการใช้เวลาอีกราว {days} วัน": ({ pace, days }) =>
+      `At this period's pace (about ${pace} attempts a day), pending places need roughly ${days} more ${days === "1" ? "day" : "days"}.`,
+
+    // Overview cards and charts
+    "ตัวชี้วัดหลัก": "Key metrics",
+    "เทียบกับช่วงก่อนหน้า": "vs previous period",
+    "เทียบกับ 24 ชั่วโมงก่อนหน้า": "vs previous 24 hours", "เทียบกับ {n} วันก่อนหน้า": "vs previous {n} days",
+    "การลองตรวจสอบที่เสร็จแล้ว": "Completed attempts", "เวลาตรวจสอบเฉลี่ย": "Average inspection time",
+    "จับคู่ได้ {n} ครั้ง": "{n} matched", "{n} จุด": "{n} pts",
+    "{n} ครั้ง": ({ n }) => `${n} ${n === "1" ? "attempt" : "attempts"}`,
+    "จาก {n} ครั้งที่มีการบันทึกเวลา": ({ n }) => `Across ${n} timed ${n === "1" ? "attempt" : "attempts"}`,
+    "ยังไม่มีการบันทึกเวลา": "No timed attempts yet",
+    "กิจกรรมตามช่วงเวลา": "Activity over time", "ตัวชี้วัดในกราฟ": "Chart metric",
+    "แสดงช่วงก่อนหน้า": "Show previous period", "ช่วงนี้": "This period",
+    "{metric} · {range} ใช้ปุ่มลูกศรซ้ายขวาเพื่ออ่านค่าแต่ละช่วง": "{metric} · {range}. Use the left and right arrow keys to read each point.",
+    "ดูเป็นตาราง": "Show as table", "ตาราง{name}": "{name} table",
+    "ไม่มีข้อมูลกิจกรรม ระบบจะลองใหม่อัตโนมัติ": "Activity data is unavailable. Retrying automatically.",
+    "ช่วงเวลาที่ทำงานมากที่สุด": "Busiest times",
+    "การลองตรวจสอบที่เสร็จแล้ว แยกตามวันและชั่วโมง · เวลาท้องถิ่นของเบราว์เซอร์": "Completed attempts by weekday and hour · browser local time",
+    "จำนวนการลองตรวจสอบที่เสร็จแล้ว แยกตามวันในสัปดาห์และชั่วโมง": "Completed attempts by weekday and hour",
+    "{day} {hour}:00 · {n} ครั้ง": ({ day, hour, n }) => `${day} ${hour}:00 · ${n} ${n === "1" ? "attempt" : "attempts"}`,
+    "ไม่มีการลองตรวจสอบที่เสร็จแล้วในช่วงนี้": "No completed attempts in this period.",
+    "เวลาตรวจสอบ": "Inspection time", "เวลาเฉลี่ย": "Average",
+    "ตั้งแต่เวิร์กเกอร์เริ่มจนเสร็จ ไม่นับเวลารอในคิว": "From worker start to completion. Queue time is excluded.",
+    "ยังไม่มีการบันทึกเวลาในช่วงนี้": "No timed attempts in this period.",
+    "ต่ำกว่า 10 วินาที": "Under 10 s", "10–20 วินาที": "10–20 s", "20–30 วินาที": "20–30 s",
+    "30–60 วินาที": "30–60 s", "1 นาทีขึ้นไป": "1 min or more",
+    "ข้อผิดพลาดและการบล็อก": "Errors and blocks",
+    "รหัสข้อผิดพลาดที่พบบ่อย": "Most frequent error codes", "ไม่มีรหัสข้อผิดพลาดในช่วงนี้": "No error codes in this period.",
+    "ความครอบคลุมของสถานที่": "Place coverage",
+    "ผลลัพธ์ล่าสุดของแต่ละสถานที่ ไม่ขึ้นกับช่วงวันที่": "Latest result for each place, whatever the date range",
+    "ยังไม่มีผลลัพธ์": "No result yet", "{a} จาก {b} สถานที่มีผลลัพธ์แล้ว": "{a} of {b} places have a result",
+    "ตัวชี้วัดและกราฟคำนวณจากการลองตรวจสอบที่เสร็จแล้วในช่วงวันที่ที่เลือก ตามเวลาท้องถิ่นของเบราว์เซอร์ ส่วนคิว ความครอบคลุม และเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด": "Metrics and charts use attempts completed in the selected date range, in the browser's local time. Queue, coverage and worker status reflect the latest uploaded snapshots.",
+
     "กำหนดไว้": "Scheduled",
-    "รายการที่กำหนดไว้รวมการตรวจซ้ำในอนาคต": "Scheduled includes future rechecks.",
+
     "ไม่มีข้อมูลเวิร์กเกอร์": "Worker data is unavailable.",
-    "มอนิเตอร์ / ภาพรวม": "Monitoring / Overview",
-    "สรุปการทำงาน": "Operations at a glance",
-    "ดูประสิทธิภาพ สถานะคิว และการทำงานของเวิร์กเกอร์ได้ในที่เดียว": "Performance, queue health, and worker activity in one place.",
-    "24 ชั่วโมงล่าสุด": "Last 24 hours",
+
     "อัตราความสำเร็จ": "Success rate",
-    "จับคู่ได้ ทั้งรายการที่มีและไม่มีเบอร์โทร": "Matched, with or without a phone",
+
     "CAPTCHA / การบล็อก": "CAPTCHA / blocks",
-    "ครั้งที่ค้นหาแล้วถูกบล็อก": "Blocked lookup attempts",
-    "ไม่มีข้อมูลคำขอความยินยอม": "Consent count unavailable",
+
     "ต้องขอความยินยอม {n} ครั้ง": "{n} consent required",
     "อัตราการลองซ้ำ": "Retry rate",
-    "กำหนดให้ลองใหม่หลังเกิดข้อผิดพลาดชั่วคราว": "Scheduled after a temporary error",
-    "รายการในคิว": "Pending queue",
+
     "{pending} รอดำเนินการ · {scheduled} กำหนดไว้": "{pending} pending · {scheduled} scheduled",
     "{n} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต": "{n} running · includes future rechecks",
-    "สถานะเวิร์กเกอร์": "Worker status",
+
     "ได้รับสัญญาณชีพล่าสุด": "Recent heartbeats received",
     "ยังไม่มีเวิร์กเกอร์": "No workers provisioned",
     "{a} ไม่มีสัญญาณชีพล่าสุด · {b} รายงานว่าหยุดทำงานล่าสุด": "{a} without a recent heartbeat · {b} last reported paused",
     "กำลังรอข้อมูลเวิร์กเกอร์": "Waiting for worker data",
-    "ประสิทธิภาพคำนวณจากการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงล่าสุด ส่วนสถานะคิวและเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด": "Performance uses completed attempts in the last 24 hours. Queue and worker status reflect the latest uploaded snapshots.",
-    "รายละเอียดกิจกรรม": "Activity breakdown",
-    "กิจกรรมของเวิร์กเกอร์": "Fleet activity",
+
     "สัญญาณชีพที่ได้รับภายใน 10 นาทีล่าสุด": "Heartbeat received within the last 10 minutes",
     "ยังไม่มีการตั้งค่าเวิร์กเกอร์ Scraper": "No scraper worker is provisioned yet.",
     "เวิร์กเกอร์ไม่รายงานสถานะ": "Worker not reporting",
@@ -134,7 +159,7 @@
     "คิว: {value}": "Queue: {value}",
     "รายงานการสิ้นสุดล่าสุด: {value}": "Last reported exit: {value}",
     "ข้อผิดพลาดชั่วคราว: {value}": "Temporary errors: {value}",
-    "ข้อมูลประสิทธิภาพบางรายการไม่พร้อมใช้งาน ระบบจะลองใหม่อัตโนมัติ": "Some performance metrics are unavailable. Retrying automatically.",
+
     "กรุณาระบุวันที่เริ่มต้นและวันที่สิ้นสุดให้ถูกต้อง": "Enter valid start and end dates.",
     "วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด": "From must be on or before To.",
     "ยังไม่มีเวลาตรวจสอบที่เสร็จแล้วสำหรับสถานที่เหล่านี้": "No completed inspection times are available for these places yet.",
@@ -200,8 +225,7 @@
     "คัดลอก config.example.js เป็น config.js แล้วเพิ่ม Supabase URL และ publishable key": "Copy config.example.js to config.js and add the Supabase URL and publishable key.",
     "เปลี่ยนเป็นภาษาอังกฤษ": "Switch to English", "เปลี่ยนเป็นภาษาไทย": "Switch to Thai",
   };
-
-  const STORAGE_KEY = "lang";
+const STORAGE_KEY = "lang";
   const LOCALES = { th: "th-TH-u-nu-latn", en: "en-US" };
   let lang = "th";
   try {

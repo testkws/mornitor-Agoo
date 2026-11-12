@@ -41,7 +41,8 @@ def load_test_page(instance, lang="en"):
 
 @pytest.fixture
 def page(browser):
-    instance = browser.new_page()
+    # Charts bucket attempts by local time; pin the zone so results do not depend on the machine.
+    instance = browser.new_page(timezone_id="Asia/Bangkok")
     load_test_page(instance)
     instance.add_script_tag(content=MOCK)
     instance.add_script_tag(content=APP)
@@ -122,6 +123,14 @@ def metric(page, name):
     return page.locator(f'[data-metric="{name}"]')
 
 
+def card(page, name):
+    return page.locator(f'#overview-view [data-chart="{name}"]')
+
+
+def activity_requests(page):
+    return page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'activity').map(r => r.params)")
+
+
 def seed_summary_data(page):
     page.evaluate("""() => {
       const state = window.monitoringTest.state;
@@ -149,47 +158,254 @@ def seed_summary_data(page):
     }""")
 
 
-def test_summary_metrics_use_attempts_in_window_and_selected_worker(page):
+def test_summary_metrics_use_attempts_in_range_and_selected_worker(page):
     seed_summary_data(page)
     page.locator("#refresh").click()
-    expect(metric(page, "success").locator(".summary-value")).to_have_text("44.4%")
-    expect(metric(page, "success")).to_contain_text("4 of 9 attempts")
-    expect(metric(page, "retry").locator(".summary-value")).to_have_text("11.1%")
+    # Seven days: both rows from a day earlier count; the future row never does.
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("10")
+    expect(metric(page, "attempts")).to_contain_text("5 matched")
+    expect(metric(page, "attempts").locator(".metric-delta")).to_contain_text("+10")
+    expect(metric(page, "success").locator(".summary-value")).to_have_text("50.0%")
+    expect(metric(page, "success")).to_contain_text("5 of 10 attempts")
+    expect(metric(page, "success").locator(".metric-delta")).to_have_count(0)
+    expect(metric(page, "duration").locator(".summary-value")).to_have_text("—")
+    expect(metric(page, "duration")).to_contain_text("No timed attempts yet")
+    expect(card(page, "metrics")).to_contain_text("vs previous 7 days")
+    expect(metric(page, "errors").locator(".summary-value")).to_have_text("3")
+    expect(metric(page, "retry").locator(".summary-value")).to_have_text("10.0%")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
     expect(metric(page, "blocked")).to_contain_text("1 consent required")
+    expect(card(page, "errors").locator(".code-list li")).to_have_text(["BLOCKED1", "CONSENT_REQUIRED1", "TIMEOUT1"])
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("30")
     expect(metric(page, "queue")).to_contain_text("20 pending · 10 scheduled")
     expect(metric(page, "queue")).to_contain_text("2 running · includes future rechecks")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
     expect(page.get_by_text("Last reported paused: BLOCKED")).to_be_visible()
     expect(page.get_by_text("Worker not reporting")).to_be_visible()
-    attempts_chart = page.get_by_role("region", name="Attempt results")
     queue_chart = page.get_by_role("region", name="Queue snapshot")
-    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("4 · 44.4%")
-    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("5 · 55.6%")
-    share = attempts_chart.locator(".chart-donut").evaluate("node => parseFloat(node.style.getPropertyValue('--matched-share'))")
-    assert share == pytest.approx(4 * 100 / 9)
     for status, count, width in (("pending", "20", "100%"), ("scheduled", "10", "50%"), ("running", "2", "10%")):
         row = queue_chart.locator(f'[data-status="{status}"]')
         expect(row.locator("strong")).to_have_text(count)
         assert row.locator(".chart-bar-fill").evaluate("node => node.style.width") == width
 
-    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerA"))
+    # 24 hours: the earlier day becomes the comparison period.
+    page.locator("#range-preset").select_option("1")
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("8")
+    expect(metric(page, "attempts").locator(".metric-delta.good")).to_contain_text("+6")
     expect(metric(page, "success").locator(".summary-value")).to_have_text("37.5%")
-    expect(metric(page, "retry").locator(".summary-value")).to_have_text("12.5%")
     expect(metric(page, "success")).to_contain_text("3 of 8 attempts")
-    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("3 · 37.5%")
-    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("5 · 62.5%")
+    expect(metric(page, "success").locator(".metric-delta.bad")).to_contain_text("−62.5 pts")
+    expect(metric(page, "errors").locator(".metric-delta.bad")).to_contain_text("+3")
+    expect(metric(page, "retry").locator(".summary-value")).to_have_text("12.5%")
+    expect(card(page, "metrics")).to_contain_text("vs previous 24 hours")
+
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerA"))
+    expect(metric(page, "success").locator(".summary-value")).to_have_text("28.6%")
+    expect(metric(page, "success")).to_contain_text("2 of 7 attempts")
+    expect(metric(page, "retry").locator(".summary-value")).to_have_text("14.3%")
     page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
     expect(metric(page, "success").locator(".summary-value")).to_have_text("100.0%")
     expect(metric(page, "retry").locator(".summary-value")).to_have_text("0.0%")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("0")
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("0")
-    expect(attempts_chart.locator('[data-result="matched"]')).to_contain_text("1 · 100.0%")
-    expect(attempts_chart.locator('[data-result="other"]')).to_contain_text("0 · 0.0%")
+    expect(card(page, "errors")).to_contain_text("No error codes in this period.")
     for row in queue_chart.locator(".chart-bar-item").all():
         expect(row.locator("strong")).to_have_text("0")
         assert row.locator(".chart-bar-fill").evaluate("node => node.style.width") == "0%"
+
+
+def test_date_range_presets_and_stepping(page):
+    seed_summary_data(page)
+    page.locator("#refresh").click()
+    label = page.locator("#range-label")
+    expect(label).to_have_text("Oct 28, 2026 → Nov 3, 2026")
+    expect(page.locator("#range-next")).to_be_disabled()
+    assert activity_requests(page)[-1] == {
+        "p_from": "2026-10-27T17:00:00.000Z", "p_to": "2026-11-03T12:00:00.000Z", "p_worker_id": None}
+
+    page.get_by_role("button", name="Previous period").click()
+    expect(label).to_have_text("Oct 21, 2026 → Oct 27, 2026")
+    expect(page.locator("#range-next")).to_be_enabled()
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("0")
+    expect(metric(page, "success")).to_contain_text("No completed attempts")
+    expect(metric(page, "queue").locator(".summary-value")).to_have_text("30")
+    expect(metric(page, "eta")).to_have_count(0)
+    assert activity_requests(page)[-1]["p_from"] == "2026-10-20T17:00:00.000Z"
+    assert activity_requests(page)[-1]["p_to"] == "2026-10-27T17:00:00.000Z"
+    page.get_by_role("button", name="Next period").click()
+    expect(label).to_have_text("Oct 28, 2026 → Nov 3, 2026")
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("10")
+    expect(metric(page, "eta")).to_contain_text("roughly 14 more days")
+
+    page.get_by_role("button", name="Previous period").click()
+    page.locator("#range-preset").select_option("30")
+    expect(label).to_have_text("Oct 5, 2026 → Nov 3, 2026")
+    expect(page.locator("#range-next")).to_be_disabled()
+    page.locator("#range-preset").select_option("1")
+    expect(label).to_have_text("Nov 2, 08:00 PM → Nov 3, 07:00 PM")
+    assert activity_requests(page)[-1]["p_from"] == "2026-11-02T13:00:00.000Z"
+
+    show(page, "places")
+    expect(page.locator("#range-stepper")).to_be_hidden()
+    expect(page.locator("#range-preset")).to_be_hidden()
+    expect(page.locator("#active-worker")).to_be_visible()
+    show(page, "overview")
+    expect(page.locator("#range-stepper")).to_be_visible()
+    expect(label).to_have_text("Nov 2, 08:00 PM → Nov 3, 07:00 PM")
+
+
+def test_activity_chart_metrics_comparison_and_readout(page):
+    seed_summary_data(page)
+    page.locator("#refresh").click()
+    trend = page.get_by_role("region", name="Activity over time", exact=True)
+    table = trend.locator("#trend-table")
+    table.locator("summary").click()
+    rows = table.locator("tbody tr")
+    expect(rows).to_have_count(7)
+    expect(rows.nth(5)).to_have_text("Mon, Nov 2, 20262")
+    expect(rows.nth(6)).to_have_text("Tue, Nov 3, 20268")
+    expect(rows.nth(0)).to_have_text("Wed, Oct 28, 20260")
+    assert trend.locator(".trend-yaxis span").all_text_contents() == ["0", "2", "4", "6", "8"]
+    expect(trend.locator(".trend-legend")).to_have_count(0)
+
+    page.locator("#trend-metric").select_option("success")
+    expect(rows.nth(5)).to_have_text("Mon, Nov 2, 2026100.0%")
+    expect(rows.nth(6)).to_have_text("Tue, Nov 3, 202637.5%")
+    expect(rows.nth(0)).to_have_text("Wed, Oct 28, 2026—")
+    assert trend.locator(".trend-yaxis span").all_text_contents() == ["0%", "25%", "50%", "75%", "100%"]
+    expect(table).to_have_attribute("open", "")
+
+    page.locator("#trend-metric").select_option("attempts")
+    # One attempt a week earlier lines up with the last day of the comparison period.
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      state.attempts.push({worker_id: state.workerA, osm_id: 'node/test', attempt_id: 'earlier', outcome: 'found',
+        status: 'checked', worker_completed_at: new Date(Date.now() - 7 * 86400000).toISOString()});
+    }""")
+    page.locator("#refresh").click()
+    expect(metric(page, "attempts").locator(".metric-delta")).to_contain_text("+9")
+    page.locator("#trend-compare").check()
+    expect(trend.locator(".trend-legend li")).to_have_text(["This period", "Previous period"])
+    expect(trend.locator("path.trend-line.earlier")).to_have_count(1)
+    expect(table.locator("thead th")).to_have_text(["Period", "Completed attempts", "Previous period"])
+    expect(rows.nth(6)).to_have_text("Tue, Nov 3, 202681")
+
+    plot = page.locator("#trend-plot")
+    box = plot.bounding_box()
+    page.mouse.move(box["x"] + box["width"] - 2, box["y"] + box["height"] / 2)
+    tip = plot.locator(".trend-tip")
+    expect(tip).to_be_visible()
+    expect(tip).to_contain_text("Tue, Nov 3, 2026")
+    expect(tip.locator(".trend-tip-row").first).to_have_text("8Completed attempts")
+    expect(tip.locator(".trend-tip-row").last).to_have_text("1Previous period")
+    page.mouse.move(0, 0)
+    expect(tip).to_be_hidden()
+    plot.focus()
+    expect(tip).to_contain_text("Tue, Nov 3, 2026")
+    page.keyboard.press("ArrowLeft")
+    expect(tip).to_contain_text("Mon, Nov 2, 2026")
+    expect(tip.locator(".trend-tip-row").first).to_have_text("2Completed attempts")
+    page.keyboard.press("Home")
+    expect(tip).to_contain_text("Wed, Oct 28, 2026")
+
+
+def test_busiest_times_use_local_weekday_and_hour(page):
+    seed_summary_data(page)
+    page.locator("#refresh").click()
+    heat = page.get_by_role("region", name="Busiest times", exact=True)
+    assert heat.locator("thead th").all_text_contents() == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    expect(heat.locator("tbody tr")).to_have_count(24)
+    # 12:00 UTC is 19:00 on Tuesday in Bangkok; the seeded rows end just before it.
+    busiest = heat.locator('td[data-day="1"][data-hour="18"]')
+    expect(busiest).to_have_text("8")
+    expect(busiest).to_have_class("heat-5")
+    expect(busiest).to_have_attribute("title", "Tuesday 18:00 · 8 attempts")
+    expect(heat.locator('td[data-day="0"][data-hour="18"]')).to_have_text("1")
+    expect(heat.locator('td[data-day="0"][data-hour="19"]')).to_have_class("heat-1")
+    expect(heat.locator('td[data-day="0"][data-hour="19"]')).to_have_attribute("title", "Monday 19:00 · 1 attempt")
+    expect(heat.locator("td.heat-0")).to_have_count(24 * 7 - 3)
+    expect(heat.locator(".heat-scale")).to_have_text("08")
+
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
+    expect(busiest).to_have_text("1")
+    expect(heat.locator("td.heat-0")).to_have_count(24 * 7 - 1)
+
+
+def test_inspection_time_distribution_and_average(page):
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      const now = Date.UTC(2026, 10, 3, 12, 0, 0);
+      Date.now = () => now;
+      const row = (index, ago, seconds) => ({
+        worker_id: state.workerA, osm_id: 'node/test', attempt_id: 'timed-' + index, outcome: 'found', status: 'checked',
+        worker_completed_at: new Date(now - ago).toISOString(),
+        worker_started_at: seconds === null ? null : new Date(now - ago - seconds * 1000).toISOString(),
+      });
+      state.attempts = [5, 15, 15, 25, 45, 70, null].map((seconds, index) => row(index, (index + 1) * 60000, seconds))
+        .concat([row('earlier', 8 * 86400000, 10)]);
+    }""")
+    page.locator("#refresh").click()
+    donut = page.get_by_role("region", name="Inspection time", exact=True)
+    assert donut.locator(".donut-legend li").all_text_contents() == [
+        "Under 10 s116.7%", "10–20 s233.3%", "20–30 s116.7%", "30–60 s116.7%", "1 min or more116.7%"]
+    expect(donut.locator("circle.donut-part")).to_have_count(5)
+    expect(donut.locator('[data-metric="average"] .summary-value')).to_have_text("29.2 s")
+    expect(donut.locator('[data-metric="average"] .metric-delta.bad')).to_contain_text("+19.2 s")
+    expect(metric(page, "duration").locator(".summary-value")).to_have_text("29.2 s")
+    expect(metric(page, "duration")).to_contain_text("Across 6 timed attempts")
+    expect(metric(page, "duration").locator(".metric-delta.bad")).to_contain_text("+19.2 s")
+
+    page.locator("#trend-metric").select_option("duration")
+    page.locator("#trend-table summary").click()
+    expect(page.locator("#trend-table tbody tr").last).to_have_text("Tue, Nov 3, 202629.2 s")
+
+    page.evaluate("window.monitoringTest.state.attempts.forEach(attempt => { attempt.worker_started_at = null; })")
+    page.locator("#refresh").click()
+    expect(donut).to_contain_text("No timed attempts in this period.")
+    expect(donut.locator(".donut")).to_have_count(0)
+
+
+def test_change_too_small_to_show_is_reported_as_no_change(page):
+    page.evaluate("""() => {
+      const state = window.monitoringTest.state;
+      const now = Date.UTC(2026, 10, 3, 12, 0, 0);
+      Date.now = () => now;
+      const row = (id, ago, milliseconds) => ({
+        worker_id: state.workerA, osm_id: 'node/test', attempt_id: id, outcome: 'found', status: 'checked',
+        worker_completed_at: new Date(now - ago).toISOString(),
+        worker_started_at: new Date(now - ago - milliseconds).toISOString(),
+      });
+      state.attempts = [row('now', 60000, 10000), row('earlier', 7 * 86400000, 10020)];
+    }""")
+    page.locator("#refresh").click()
+    expect(metric(page, "duration").locator(".summary-value")).to_have_text("10 s")
+    delta = metric(page, "duration").locator(".metric-delta")
+    expect(delta).to_have_class("metric-delta flat")
+    expect(delta).to_contain_text("→0.0 s")
+    expect(metric(page, "attempts").locator(".metric-delta.flat")).to_contain_text("→0")
+    expect(metric(page, "success").locator(".metric-delta.flat")).to_contain_text("→0.0 pts")
+
+
+def test_place_coverage_uses_latest_outcomes(page):
+    page.evaluate("""() => {
+      const places = window.monitoringTest.state.places;
+      places.slice(0, 20).forEach(place => { place.outcome = 'found_no_phone'; });
+      places.slice(20, 30).forEach(place => { place.outcome = 'ambiguous'; });
+      places.slice(30, 34).forEach(place => { place.outcome = 'lookup_error'; });
+      places.slice(34, 51).forEach(place => { place.outcome = null; });
+    }""")
+    page.locator("#refresh").click()
+    coverage = page.get_by_role("region", name="Place coverage", exact=True)
+    expect(coverage.locator(".summary-value")).to_have_text("79.4%")
+    expect(coverage).to_contain_text("81 of 102 places have a result")
+    assert coverage.locator(".stack-legend li").all_text_contents() == [
+        "Found5150.0%", "Found (no phone)2019.6%", "Ambiguous109.8%", "Not found00.0%", "No result yet2120.6%"]
+    assert coverage.locator(".stack-part").all_text_contents() == ["50%", "20%", "10%", "21%"]
+    expect(coverage.get_by_role("img")).to_have_attribute("aria-label", re.compile(r"^Found 51 \(50\.0%\), .*No result yet 21 \(20\.6%\)$"))
+
+    page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
+    expect(coverage.locator(".summary-value")).to_have_text("100.0%")
+    expect(coverage).to_contain_text("1 of 1 places have a result")
 
 
 def test_empty_summary_and_no_workers(page):
@@ -198,13 +414,20 @@ def test_empty_summary_and_no_workers(page):
       state.attempts = []; state.workers = []; state.places = [];
     }""")
     page.locator("#refresh").click()
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("0")
+    expect(metric(page, "attempts").locator(".metric-delta.flat")).to_contain_text("→0")
     expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
     expect(metric(page, "retry")).to_contain_text("No completed attempts")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("0")
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("0")
+    expect(metric(page, "eta")).to_have_count(0)
     expect(metric(page, "workers")).to_contain_text("No workers provisioned")
     expect(page.get_by_text("No scraper worker is provisioned yet.")).to_be_visible()
-    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("No completed attempts in the last 24 hours.")
+    expect(page.get_by_role("region", name="Busiest times", exact=True)).to_contain_text("No completed attempts in this period.")
+    expect(page.get_by_role("region", name="Inspection time", exact=True)).to_contain_text("No timed attempts in this period.")
+    expect(page.get_by_role("region", name="Place coverage", exact=True)).to_contain_text("No places have been reported yet.")
+    expect(page.locator("#trend-plot")).to_be_visible()
+    expect(page.locator("#global-error")).to_be_empty()
 
 
 def test_resume_state_does_not_present_historical_pause_as_current(page):
@@ -275,75 +498,58 @@ def test_missing_and_future_heartbeats_are_not_counted_as_recent(page):
     expect(page.get_by_text("Worker not reporting")).to_have_count(2)
 
 
-def test_failed_metric_does_not_hide_queue_and_worker_status(page):
-    hold(page, "metric-matched")
+def test_failed_activity_does_not_hide_queue_coverage_and_worker_status(page):
+    hold(page, "activity")
     page.locator("#refresh").click()
-    finish(page, pending(page, "metric-matched"), "Metrics unavailable")
-    expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
-    expect(metric(page, "retry").locator(".summary-value")).to_have_text("0.0%")
+    finish(page, pending(page, "activity"), "function monitoring_activity does not exist")
+    for name in ("attempts", "success", "duration", "errors", "blocked", "retry"):
+        expect(metric(page, name).locator(".summary-value")).to_have_text("—")
+        expect(metric(page, name)).to_contain_text("Count unavailable")
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("30")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
-    expect(page.locator("#global-error")).to_contain_text("Some performance metrics are unavailable")
+    expect(page.get_by_role("region", name="Place coverage", exact=True).locator(".summary-value")).to_have_text("100.0%")
+    expect(page.locator("#global-error")).to_contain_text("Activity data is unavailable")
     expect(page.locator("#live-text")).to_have_text("Partial update")
-    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
+    for name in ("Activity over time", "Busiest times", "Inspection time"):
+        expect(page.get_by_role("region", name=name, exact=True)).to_contain_text("Activity data is unavailable")
+    expect(page.locator("#trend-metric")).to_be_disabled()
     expect(page.get_by_role("region", name="Queue snapshot").locator('[data-status="pending"] strong')).to_have_text("20")
     page.locator("#refresh").click()
     expect(metric(page, "success").locator(".summary-value")).to_have_text("100.0%")
-    expect(page.get_by_role("region", name="Attempt results").locator('[data-result="matched"]')).to_contain_text("101 · 100.0%")
+    expect(metric(page, "success")).to_contain_text("101 of 101 attempts")
+    expect(page.locator("#trend-metric")).to_be_enabled()
     expect(page.locator("#global-error")).to_be_empty()
 
 
-@pytest.mark.parametrize("failed_kind", ["metric-total", "metric-consent", "metric-blocked", "metric-retry"])
-def test_individual_metric_failure_is_not_reported_as_zero(page, failed_kind):
-    seed_summary_data(page)
-    hold(page, failed_kind)
+def test_old_overview_activity_cannot_replace_new_worker_or_range_selection(page):
+    hold(page, "activity")
     page.locator("#refresh").click()
-    finish(page, pending(page, failed_kind), "Count unavailable")
-    expect(page.locator("#global-error")).to_contain_text("Some performance metrics are unavailable")
-    expect(metric(page, "queue").locator(".summary-value")).to_have_text("30")
-    if failed_kind == "metric-total":
-        expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
-        expect(metric(page, "retry").locator(".summary-value")).to_have_text("—")
-        expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
-        expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
-    elif failed_kind == "metric-consent":
-        expect(metric(page, "blocked")).to_contain_text("Consent count unavailable")
-        expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
-    elif failed_kind == "metric-blocked":
-        expect(metric(page, "blocked").locator(".summary-value")).to_have_text("—")
-        expect(metric(page, "blocked")).to_contain_text("1 consent required")
-    else:
-        expect(metric(page, "retry").locator(".summary-value")).to_have_text("—")
-        expect(metric(page, "success").locator(".summary-value")).to_have_text("44.4%")
-
-
-def test_inconsistent_counts_do_not_show_impossible_rates(page):
-    hold(page, "metric-matched")
-    page.locator("#refresh").click()
-    request_id = pending(page, "metric-matched")
-    page.evaluate("window.monitoringTest.state.attempts = []")
-    finish(page, request_id)
-    expect(metric(page, "success").locator(".summary-value")).to_have_text("—")
-    expect(page.locator("#global-error")).to_contain_text("Some performance metrics are unavailable")
-    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("Attempt counts are unavailable")
-
-
-def test_old_overview_metrics_cannot_replace_new_worker_selection(page):
-    hold(page, "metric-matched")
-    page.locator("#refresh").click()
-    old_request = pending(page, "metric-matched")
+    old_request = pending(page, "activity")
     page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
     expect(metric(page, "success")).to_contain_text("No completed attempts")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("0 / 1")
     finish(page, old_request)
     expect(metric(page, "success")).to_contain_text("No completed attempts")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("0 / 1")
-    expect(page.get_by_role("region", name="Attempt results")).to_contain_text("No completed attempts")
+    expect(page.locator("#global-error")).to_be_empty()
+
+    page.locator("#active-worker").select_option("")
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("101")
+    hold(page, "activity")
+    page.locator("#range-prev").click()
+    old_range = pending(page, "activity")
+    page.locator("#range-preset").select_option("30")
+    expect(card(page, "metrics")).to_contain_text("vs previous 30 days")
+    label = page.locator("#range-label").text_content()
+    finish(page, old_range, "Old range failed")
+    expect(page.locator("#range-label")).to_have_text(label)
+    expect(card(page, "metrics")).to_contain_text("vs previous 30 days")
+    expect(metric(page, "attempts").locator(".summary-value")).to_have_text("101")
     expect(page.locator("#global-error")).to_be_empty()
 
 
-def test_summary_uses_head_counts_without_page_limit(page):
-    initial_queries = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).length")
+def test_overview_reads_one_aggregate_instead_of_attempt_rows(page):
+    initial = len(activity_requests(page))
     page.evaluate("""() => {
       const state = window.monitoringTest.state;
       state.attempts = Array.from({length: 1250}, (_, index) => ({
@@ -353,10 +559,11 @@ def test_summary_uses_head_counts_without_page_limit(page):
     }""")
     page.locator("#refresh").click()
     expect(metric(page, "success")).to_contain_text("1,250 of 1,250 attempts")
-    requests = page.evaluate("start => window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).slice(start)", initial_queries)
-    assert len(requests) == 5
-    assert all(request["params"]["head"] for request in requests)
-    assert requests[-1]["kind"] == "metric-total"
+    assert len(activity_requests(page)) == initial + 1
+    kinds = page.evaluate("window.monitoringTest.state.requests.map(r => r.kind)")
+    assert set(kinds) == {"overview", "activity"}
+    sizes = page.evaluate("window.monitoringTest.state.requests.filter(r => r.kind === 'activity').map(r => r.bodyBytes)")
+    assert sizes[-1] < 400
 
 
 @pytest.mark.parametrize("width", [320, 360, 375, 768, 1024, 1440])
@@ -374,27 +581,38 @@ def test_responsive_layout_and_theme(page, width):
 
 
 @pytest.mark.parametrize("width", [320, 480, 481, 768, 900, 1024, 1440])
-def test_header_controls_are_aligned(page, width):
+def test_header_and_filter_controls_are_aligned(page, width):
     page.set_viewport_size({"width": width, "height": 900})
-    select = page.locator("#active-worker").bounding_box()
+    title = page.locator("h1").bounding_box()
     refresh = page.locator("#refresh").bounding_box()
     language = page.locator("#lang-toggle").bounding_box()
     theme = page.locator("#theme-toggle").bounding_box()
-    status = page.locator("#live-status").bounding_box()
-    assert select and refresh and language and theme and status
+    stepper = page.locator("#range-stepper").bounding_box()
+    preset = page.locator("#range-preset").bounding_box()
+    worker = page.locator("#active-worker").bounding_box()
+    assert title and refresh and language and theme and stepper and preset and worker
+    compact = width > 700
     for button in (refresh, language, theme):
-        assert abs(button["y"] - select["y"]) <= 1
-        assert abs(button["height"] - select["height"]) <= 1
-        assert button["width"] >= 44 and button["height"] >= 44
-    assert select["x"] + select["width"] <= refresh["x"]
+        assert abs(button["y"] - refresh["y"]) <= 1
+        assert button["width"] >= (36 if compact else 44) and button["height"] >= (36 if compact else 44)
+    assert title["x"] + title["width"] <= refresh["x"]
     assert refresh["x"] + refresh["width"] <= language["x"]
     assert language["x"] + language["width"] <= theme["x"]
     assert theme["x"] + theme["width"] <= width
-    if abs((status["y"] + status["height"] / 2) - (select["y"] + select["height"] / 2)) <= 1:
-        assert status["x"] + status["width"] <= select["x"]
+    for control in (stepper, preset, worker):
+        assert control["x"] >= 0 and control["x"] + control["width"] <= width
+        assert control["height"] >= (32 if compact else 44)
+        assert control["y"] >= theme["y"] + theme["height"]
+    assert abs(preset["y"] - worker["y"]) <= 1
+    assert preset["x"] + preset["width"] <= worker["x"]
+    if width > 640:
+        assert abs((stepper["y"] + stepper["height"] / 2) - (preset["y"] + preset["height"] / 2)) <= 1
+        assert stepper["x"] + stepper["width"] <= preset["x"]
     else:
-        assert status["y"] + status["height"] < select["y"]
+        assert stepper["y"] + stepper["height"] <= preset["y"]
     expect(page.get_by_role("combobox", name="Worker", exact=True)).to_have_attribute("id", "active-worker")
+    expect(page.get_by_role("combobox", name="Period", exact=True)).to_have_attribute("id", "range-preset")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
 @pytest.mark.parametrize("width", [481, 768])
@@ -402,12 +620,14 @@ def test_header_remains_usable_with_enlarged_text(page, width):
     page.set_viewport_size({"width": width, "height": 900})
     page.evaluate("document.documentElement.style.fontSize = '200%'")
     select = page.locator("#active-worker").bounding_box()
+    stepper = page.locator("#range-stepper").bounding_box()
     refresh = page.locator("#refresh").bounding_box()
     theme = page.locator("#theme-toggle").bounding_box()
-    assert select and refresh and theme
-    assert abs(refresh["y"] - select["y"]) <= 1
-    assert abs(theme["y"] - select["y"]) <= 1
+    assert select and stepper and refresh and theme
+    assert abs(theme["y"] - refresh["y"]) <= 1
     assert theme["x"] + theme["width"] <= width
+    for control in (select, stepper):
+        assert control["x"] >= 0 and control["x"] + control["width"] <= width
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
@@ -469,15 +689,15 @@ def test_manual_theme_choice_survives_reload(browser):
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to dark theme")
     expect(page.locator("#theme-icon-moon")).to_be_visible()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(247, 249, 251)")
-    expect(page.locator("#active-worker")).to_have_css("border-top-color", "rgb(114, 140, 150)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 255)")
+    expect(page.locator("#refresh")).to_have_css("border-top-color", "rgb(129, 131, 155)")
     assert page.evaluate("document.documentElement.dataset.theme") == "light"
 
     page.evaluate("localStorage.setItem('theme', 'system')")
     page.reload()
     expect(page.locator("#theme-toggle")).to_have_attribute("aria-label", "Switch to light theme")
     page.locator("#theme-toggle").click()
-    expect(page.locator("body")).to_have_css("background-color", "rgb(247, 249, 251)")
+    expect(page.locator("body")).to_have_css("background-color", "rgb(255, 255, 255)")
     assert page.evaluate("localStorage.getItem('theme')") == "light"
     page.close()
 
@@ -488,90 +708,95 @@ def test_theme_palette_has_readable_text_and_touch_targets(page):
         linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
         return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
 
-    pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--bg"), ("--muted", "--surface-2"),
-             ("--accent", "--bg"), ("--accent", "--surface"), ("--accent", "--accent-soft"),
-             ("--ok", "--ok-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"),
-             ("--info", "--info-soft"), ("--selected-ink", "--selected-bg"),
-             ("--accent-ink", "--action"), ("--accent-ink", "--action-hover")]
+    def ratio(colors, first, second):
+        low, high = sorted((luminance(colors[first]), luminance(colors[second])))
+        return (high + 0.05) / (low + 0.05)
+
+    text_pairs = [("--ink", "--bg"), ("--ink", "--surface"), ("--muted", "--bg"), ("--muted", "--surface-2"),
+                  ("--muted", "--accent-soft"), ("--accent", "--bg"), ("--accent", "--surface"), ("--accent", "--accent-soft"),
+                  ("--ok", "--ok-soft"), ("--warn", "--warn-soft"), ("--bad", "--bad-soft"), ("--info", "--info-soft"),
+                  ("--ok", "--surface"), ("--bad", "--surface"), ("--selected-ink", "--selected-bg"),
+                  ("--accent-ink", "--action"), ("--accent-ink", "--action-hover"),
+                  # Heatmap cells print their count on the fill.
+                  ("--muted", "--ramp-0"), ("--ink", "--heat-1"), ("--ink", "--heat-2"), ("--ink", "--heat-3"),
+                  ("--ink", "--heat-4"), ("--ramp-high-ink", "--heat-5")]
+    mark_pairs = [("--chart-fill", "--bg"), ("--chart-fill", "--surface"), ("--chart-fill", "--surface-2"),
+                  ("--chart-earlier", "--surface"), ("--control-line", "--bg"), ("--control-line", "--surface"),
+                  ("--control-line", "--surface-2"), ("--control-line", "--accent-soft")]
+    names = sorted({name for pair in text_pairs + mark_pairs for name in pair}
+                   | {f"--ramp-{step}" for step in range(1, 6)} | {f"--heat-{step}" for step in range(1, 6)})
     for theme in ("light", "dark"):
         page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
-        colors = page.evaluate("""() => {
+        colors = page.evaluate("""names => {
           const styles = getComputedStyle(document.documentElement);
-          return Object.fromEntries(['--bg', '--ink', '--surface', '--muted', '--surface-2', '--accent', '--accent-soft',
-            '--ok', '--ok-soft', '--warn', '--warn-soft', '--bad', '--bad-soft', '--info', '--info-soft',
-            '--brand-moss', '--brand-ocean', '--brand-blue', '--brand-sky', '--brand-cloud', '--chart-fill', '--chart-other',
-            '--control-line', '--accent-ink', '--action', '--action-hover', '--selected-ink', '--selected-bg', '--logo-ink']
-            .map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
-        }""")
-        assert [colors[name] for name in ("--brand-moss", "--brand-ocean", "--brand-blue", "--brand-sky", "--brand-cloud")] == [
-            "#687864", "#31708e", "#5085a5", "#8fc1e3", "#f7f9fb"]
-        for foreground, background in pairs:
-            low, high = sorted((luminance(colors[foreground]), luminance(colors[background])))
-            assert (high + 0.05) / (low + 0.05) >= 4.5, (theme, foreground, background)
-        for background in ("--bg", "--surface-2"):
-            low, high = sorted((luminance(colors["--chart-fill"]), luminance(colors[background])))
-            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--chart-fill", background)
-        low, high = sorted((luminance(colors["--accent"]), luminance(colors["--chart-other"])))
-        assert (high + 0.05) / (low + 0.05) >= 3, (theme, "chart segments")
-        low, high = sorted((luminance(colors["--logo-ink"]), luminance(colors["--brand-moss"])))
-        assert (high + 0.05) / (low + 0.05) >= 3, (theme, "logo")
-        for background in ("--bg", "--surface", "--surface-2", "--accent-soft"):
-            low, high = sorted((luminance(colors["--control-line"]), luminance(colors[background])))
-            assert (high + 0.05) / (low + 0.05) >= 3, (theme, "--control-line", background)
+          return Object.fromEntries(names.map(name => [name, styles.getPropertyValue(name).trim().toLowerCase()]));
+        }""", names)
+        for foreground, background in text_pairs:
+            assert ratio(colors, foreground, background) >= 4.5, (theme, foreground, background)
+        for foreground, background in mark_pairs:
+            assert ratio(colors, foreground, background) >= 3, (theme, foreground, background)
+        # One hue in ordered steps: each ramp moves steadily away from the surface, and the
+        # step nearest the surface is still visible on it.
+        for ramp in ("--ramp", "--heat"):
+            steps = [luminance(colors[f"{ramp}-{step}"]) for step in range(1, 6)]
+            assert steps in (sorted(steps), sorted(steps, reverse=True)), (theme, ramp)
+            assert (steps[0] > steps[-1]) == (theme == "light"), (theme, ramp)
+        assert ratio(colors, "--ramp-1", "--surface") >= 2, theme
 
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     rendered = page.evaluate("""() => ({
       background: getComputedStyle(document.body).backgroundColor,
-      logo: getComputedStyle(document.querySelector('.logo')).backgroundColor,
-      card: getComputedStyle(document.querySelector('.summary-card')).backgroundColor,
-      cardBorder: getComputedStyle(document.querySelector('.summary-card')).borderTopColor,
+      card: getComputedStyle(document.querySelector('.card')).backgroundColor,
+      cardBorder: getComputedStyle(document.querySelector('.card')).borderTopColor,
       action: getComputedStyle(document.querySelector('#place-search')).backgroundColor,
       avatar: getComputedStyle(document.querySelector('.worker-avatar')).backgroundColor,
-      navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
+      chip: getComputedStyle(document.querySelector('#active-worker')).backgroundColor,
+      line: getComputedStyle(document.querySelector('.trend-line')).stroke,
     })""")
     assert rendered == {
-        "background": "rgb(247, 249, 251)",
-        "logo": "rgb(104, 120, 100)",
+        "background": "rgb(255, 255, 255)",
         "card": "rgb(255, 255, 255)",
-        "cardBorder": "rgb(197, 217, 225)",
-        "action": "rgb(49, 112, 142)",
-        "avatar": "rgb(229, 241, 248)",
-        "navigation": "rgb(80, 133, 165)",
+        "cardBorder": "rgb(227, 228, 238)",
+        "action": "rgb(79, 70, 229)",
+        "avatar": "rgb(238, 239, 255)",
+        "chip": "rgb(238, 239, 255)",
+        "line": "rgb(99, 105, 226)",
     }
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     dark_rendered = page.evaluate("""() => ({
       background: getComputedStyle(document.body).backgroundColor,
-      card: getComputedStyle(document.querySelector('.summary-card')).backgroundColor,
+      card: getComputedStyle(document.querySelector('.card')).backgroundColor,
       action: getComputedStyle(document.querySelector('#place-search')).backgroundColor,
       actionText: getComputedStyle(document.querySelector('#place-search')).color,
-      navigation: getComputedStyle(document.querySelector('.tab.active'), '::after').backgroundColor,
+      line: getComputedStyle(document.querySelector('.trend-line')).stroke,
     })""")
     assert dark_rendered == {
-        "background": "rgb(22, 42, 52)",
-        "card": "rgb(34, 63, 77)",
-        "action": "rgb(143, 193, 227)",
-        "actionText": "rgb(23, 49, 63)",
-        "navigation": "rgb(143, 193, 227)",
+        "background": "rgb(18, 19, 28)",
+        "card": "rgb(27, 28, 41)",
+        "action": "rgb(165, 171, 255)",
+        "actionText": "rgb(20, 21, 42)",
+        "line": "rgb(120, 130, 239)",
     }
     page.evaluate("document.documentElement.dataset.theme = 'light'")
     show(page, "places")
-    for selector in ("#active-worker", "#refresh", "#theme-toggle", "#place-query", "#place-outcome", "#places-next"):
-        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(114, 140, 150)")
+    for selector in ("#refresh", "#theme-toggle", "#place-query", "#place-outcome", "#places-next"):
+        expect(page.locator(selector)).to_have_css("border-top-color", "rgb(129, 131, 155)")
     page.locator("#place-search").hover()
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(33, 77, 100)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(63, 55, 201)")
     expect(page.locator("#place-search")).to_have_css("color", "rgb(255, 255, 255)")
 
     page.emulate_media(color_scheme="dark")
     page.evaluate("delete document.documentElement.dataset.theme")
     system_dark = page.evaluate("getComputedStyle(document.body).backgroundColor")
-    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(201, 229, 247)")
-    expect(page.locator("#place-search")).to_have_css("color", "rgb(23, 49, 63)")
+    expect(page.locator("#place-search")).to_have_css("background-color", "rgb(197, 201, 255)")
+    expect(page.locator("#place-search")).to_have_css("color", "rgb(20, 21, 42)")
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     assert page.evaluate("getComputedStyle(document.body).backgroundColor") == system_dark
     assert system_dark != rendered["background"]
 
+    show(page, "overview")
     page.set_viewport_size({"width": 375, "height": 900})
-    for selector in ("#theme-toggle", "#refresh", "#active-worker"):
+    for selector in ("#theme-toggle", "#refresh", "#active-worker", "#range-prev", "#range-next", "#range-preset", "#trend-metric"):
         box = page.locator(selector).bounding_box()
         assert box["width"] >= 44 and box["height"] >= 44, selector
 
@@ -604,10 +829,11 @@ def test_worker_picker_uses_theme_and_supports_keyboard(page, theme):
 
     if page.evaluate("CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))') && matchMedia('(hover: hover) and (pointer: fine)').matches"):
         assert picker.evaluate("node => node.matches(':open')")
-        expected_surface = "rgb(255, 255, 255)" if theme == "light" else "rgb(34, 63, 77)"
-        assert picker.evaluate("node => getComputedStyle(node, '::picker(select)').backgroundColor") == expected_surface
-        expect(picker.locator("option:checked")).to_have_css("background-color", "rgb(198, 226, 243)")
-        expect(picker.locator("option:checked")).to_have_css("color", "rgb(32, 49, 60)")
+        surface, selected, ink = (("rgb(255, 255, 255)", "rgb(223, 225, 255)", "rgb(22, 23, 31)") if theme == "light"
+                                  else ("rgb(27, 28, 41)", "rgb(58, 62, 117)", "rgb(238, 240, 250)"))
+        assert picker.evaluate("node => getComputedStyle(node, '::picker(select)').backgroundColor") == surface
+        expect(picker.locator("option:checked")).to_have_css("background-color", selected)
+        expect(picker.locator("option:checked")).to_have_css("color", ink)
 
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
@@ -1059,13 +1285,13 @@ def test_detail_paging_handles_shrinking_history(page):
     expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 3")
     expect(page.get_by_role("row").filter(has_text="Attempt 000").locator("td").nth(1)).to_have_text("1 s")
     page.locator("#attempts-next").click()
-    expect(page.get_by_text("Attempt 050", exact=True)).to_be_visible()
+    expect(page.locator("#attempts-table").get_by_text("Attempt 050", exact=True)).to_be_visible()
     expect(page.get_by_role("row").filter(has_text="Attempt 050").locator("td").nth(1)).to_have_text("51 s")
     page.evaluate("window.monitoringTest.state.attempts = window.monitoringTest.state.attempts.slice(0, 1)")
     page.evaluate("window.monitoringTest.tick()")
     expect(page.locator("#attempts-page")).to_contain_text("Page 1 of 1")
     assert request_offsets(page, "attempts")[-2:] == [50, 0]
-    expect(page.get_by_text("Attempt 000", exact=True)).to_be_visible()
+    expect(page.locator("#attempts-table").get_by_text("Attempt 000", exact=True)).to_be_visible()
 
 
 def test_closed_detail_ignores_late_failure_and_reopens(page):
@@ -1093,7 +1319,7 @@ def test_older_detail_failure_cannot_replace_newer_page(page):
     page.locator("#attempts-next").click()
     expect(page.locator("#attempts-page")).to_contain_text("Page 2 of 3")
     finish(page, old_request, "Old attempt request failed")
-    expect(page.get_by_text("Attempt 050", exact=True)).to_be_visible()
+    expect(page.locator("#attempts-table").get_by_text("Attempt 050", exact=True)).to_be_visible()
     expect(page.locator("#detail-error")).to_be_empty()
     expect(page.locator("#global-error")).to_be_empty()
 
@@ -1151,16 +1377,21 @@ def test_polling_and_visibility_do_not_apply_stale_results(page):
 def test_overview_reuses_workers_and_polls_every_five_minutes(page):
     assert page.evaluate("window.monitoringTest.timerDelays()") == [300_000]
     initial = page.evaluate("window.monitoringTest.state.requests")
-    assert sum(request["kind"] == "overview" for request in initial) == 1
-    assert not any(request["kind"] == "workers" for request in initial)
-    assert len([request for request in initial if request["kind"].startswith("metric-")]) == 5
-    assert all(request["params"]["head"] for request in initial if request["kind"].startswith("metric-"))
+    assert [request["kind"] for request in initial] == ["overview", "activity"]
 
+    page.locator("#trend-table summary").click()
+    page.locator("#trend-metric").select_option("matched")
+    page.locator("#trend-metric").focus()
     page.evaluate("window.monitoringTest.tick()")
     page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind === 'overview').length === 2")
-    page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind.startsWith('metric-')).length === 10")
+    page.wait_for_function("window.monitoringTest.state.requests.filter(r => r.kind === 'activity').length === 2")
+    expect(page.locator("#live-text")).to_contain_text("Updated")
     requests = page.evaluate("window.monitoringTest.state.requests")
     assert not any(request["kind"] == "workers" for request in requests)
+    # A poll redraws the cards without losing the reader's place in them.
+    expect(page.locator("#trend-metric")).to_be_focused()
+    expect(page.locator("#trend-metric")).to_have_value("matched")
+    expect(page.locator("#trend-table")).to_have_attribute("open", "")
     expect(page.locator(".nav-meta")).to_contain_text("5 min")
 
 
@@ -1683,4 +1914,19 @@ def test_export_is_available_in_thai_on_a_small_screen(browser):
     with page.expect_download():
         button.click()
     expect(page.locator("#place-export-status")).to_contain_text("ดาวน์โหลดข้อมูลมอนิเตอร์")
+    page.close()
+
+
+def test_overview_is_available_in_thai_on_a_small_screen(browser):
+    page = browser.new_page(viewport={"width": 375, "height": 900}, timezone_id="Asia/Bangkok")
+    load_test_page(page, "th")
+    page.add_script_tag(content=MOCK)
+    page.add_script_tag(content=APP)
+    expect(page.locator("#live-text")).to_contain_text("อัปเดตแล้ว")
+    expect(page.get_by_role("region", name="ตัวชี้วัดหลัก", exact=True)).to_contain_text("เทียบกับ 7 วันก่อนหน้า")
+    expect(page.locator("#range-preset option:checked")).to_have_text("7 วัน")
+    expect(page.get_by_role("button", name="ช่วงก่อนหน้า")).to_be_enabled()
+    expect(page.get_by_role("region", name="ช่วงเวลาที่ทำงานมากที่สุด", exact=True).locator("thead th").first).to_have_text("จันทร์")
+    expect(page.get_by_role("region", name="ความครอบคลุมของสถานที่", exact=True)).to_contain_text("102 จาก 102 สถานที่มีผลลัพธ์แล้ว")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.close()

@@ -18,10 +18,15 @@ continues running on Ubuntu; the ingestion Edge Function stays on Supabase.
 The dashboard is read-only and public under the existing optional public-read
 configuration. Apply `0001_google_scraper_monitoring.sql` and
 `0003_monitoring_state_snapshots.sql` before deploying the updated worker,
-Edge Function and dashboard. Apply `0002_public_read_monitoring.sql` only if
+Edge Function and dashboard, and `0004_monitoring_activity.sql` before
+deploying this dashboard: the Overview charts read its
+`monitoring_activity` function. Until it is applied, those charts show
+"Activity data is unavailable" while the queue, coverage and worker cards
+keep working. Apply `0002_public_read_monitoring.sql` only if
 public access is intended; it grants the `anon`
-role SELECT on the five monitoring tables and the two read RPCs; its revert
-statements are in a comment at the bottom). Worker setup must already be
+role SELECT on the five monitoring tables and the read RPCs (its revert
+statements are in a comment at the bottom). `0002` and `0004` can be applied
+in either order. Worker setup must already be
 configured. Anyone with the URL can read worker IDs, place evidence, and logs,
 so keep sensitive data out of event payloads. Worker credentials and ingestion
 stay closed to `anon`.
@@ -34,13 +39,16 @@ Thai is the source language: every string is passed through `t("ข้อคว�
 and `i18n.js` holds the English catalog (static `index.html` text is translated
 from the same catalog). Add new UI text to that catalog as well.
 
-The UI uses nature-inspired moss green (`#687864`), ocean blue (`#31708E`),
-blue (`#5085A5`), pale sky blue (`#8FC1E3`), and cloud white (`#F7F9FB`).
-It follows the system light/dark preference and has a manual theme toggle
-that remembers your choice. Warning and error colors remain distinct for
-operational status.
+The UI uses white cards with thin borders and one indigo accent (`#4F46E5`
+for actions, `#EEEFFF` for chips). Charts use a single indigo ramp: five
+ordered steps for the inspection-time donut and lighter steps for the
+heatmap. Place coverage uses four distinct hues plus grey. It follows the
+system light/dark preference and has a manual theme toggle that remembers
+your choice. Good, warning and error colors remain distinct for operational
+status, and every change indicator also carries an arrow and a sign.
 
-The worker selector applies across all sections. On Places and Logs, select
+The filter bar under the tabs holds the date range (Overview only) and the
+worker selector, which applies across all sections. On Places and Logs, select
 **Apply filters** to use edited filters; **Reset filters** clears the filters in
 that section while keeping the selected worker. Log date filters use the
 browser's local time. Tables can scroll horizontally on smaller screens.
@@ -152,32 +160,65 @@ special characters use the existing full-place search to preserve its behavior.
 
 ## Overview metrics
 
-Performance cards use completed attempts in the rolling last 24 hours, based on
-the worker completion timestamp. The success rate is `found` plus
-`found_no_phone` divided by all completed attempts. The retry rate is attempts
-marked `retry_wait` with outcome `lookup_error`, divided by all completed
-attempts; scheduled rechecks after a non-error result are excluded. CAPTCHA /
-blocks counts `BLOCKED` errors; consent-required errors are shown separately.
-Rates without attempts are displayed as unavailable rather than zero.
+The Overview follows the date range in the filter bar: **24 hours**, **7 days**
+(default) or **30 days**. 24 hours is a rolling window drawn as hourly points.
+7 and 30 days cover today plus the earlier 6 or 29 calendar days, drawn as daily
+points. The arrows step back and forward by whole periods. Days, weekdays and
+hours use the browser's local time; attempts are placed by the worker's
+completion timestamp.
 
-Pending queue and worker status use the most recently uploaded snapshots. The
-queue total includes both `pending` and `retry_wait`, including rechecks that
-may not be due yet. A recent worker heartbeat means one was received within
-ten minutes, and a pause reason is the last reported value. With five-minute
-refreshes, a stopped worker can take about 10–15 minutes after its last
-heartbeat to appear as not reporting. Resume and exit
-snapshots update that state in worker sequence order; historical exits remain
-visible separately. Upload delays can make these snapshots lag behind the worker.
+Every figure with an arrow is compared with the period of equal length
+immediately before the selected one. For the current period that is the same
+elapsed time, not a whole calendar period, so a part-finished day is compared
+with an equally long stretch. Counts show the difference, the success rate
+shows percentage points, and inspection time shows seconds. The arrow and sign
+give the direction; the colour says whether that direction is good.
 
-The overview performs five exact, count-only queries against existing public
-monitoring tables per refresh. The queries return counts rather than attempt
-records, but database work grows with attempt history and viewer traffic. Counts
-are separate reads, so rates can briefly differ while new uploads arrive.
+- **Key metrics.** Completed attempts; success rate (`found` plus
+  `found_no_phone` divided by all completed attempts); average inspection time
+  (worker start to completion, excluding queue time, over attempts with both
+  timestamps). Rates without attempts are shown as unavailable, not zero.
+- **Activity over time.** One line for the chosen metric: completed attempts,
+  matched, success rate, lookup errors or average inspection time. **Show
+  previous period** adds the comparison period as a dashed line. Hover, tap or
+  use the arrow keys on the chart for exact values; **Show as table** lists
+  them.
+- **Busiest times.** Completed attempts by weekday and hour of day.
+- **Inspection time.** Share of timed attempts under 10 s, 10–20 s, 20–30 s,
+  30–60 s, and 1 min or more, with the average in the centre.
+- **Errors and blocks.** Lookup errors (`lookup_error` outcomes); CAPTCHA /
+  blocks (`BLOCKED` errors) with consent-required errors shown separately; the
+  retry rate (attempts marked `retry_wait` with outcome `lookup_error`, divided
+  by all completed attempts, so scheduled rechecks after a non-error result are
+  excluded); and the five most frequent error codes.
 
-The activity charts use the same counts and selected worker as the overview.
-Attempt results compare matched and other completed attempts in the last 24
-hours; the queue chart compares pending, scheduled, and running counts from the
-latest snapshots. The charts do not issue additional queries.
+Three cards ignore the date range and always show the most recently uploaded
+snapshots:
+
+- **Queue snapshot.** The total includes both `pending` and `retry_wait`,
+  including rechecks that may not be due yet. For the current period it adds a
+  rough estimate of how long pending places would take at the period's pace.
+  Attempts include rechecks, so treat it as a lower bound.
+- **Place coverage.** The latest outcome of every place: found, found without a
+  phone, ambiguous, not found, and no result yet (never checked, or the last
+  check ended in an error).
+- **Workers.** A recent worker heartbeat means one was received within ten
+  minutes, and a pause reason is the last reported value. With five-minute
+  refreshes, a stopped worker can take about 10–15 minutes after its last
+  heartbeat to appear as not reporting. Resume and exit snapshots update that
+  state in worker sequence order; historical exits remain visible separately.
+  The usage bar compares the reported daily usage with the daily limit.
+
+Upload delays can make all of these lag behind the worker.
+
+Each refresh makes two requests: `monitoring_overview` for the snapshots and
+`monitoring_activity` for the selected range. The second returns hourly totals
+for the range and its comparison period (at most 31 days each), not attempt
+records, and uses the `monitoring_attempts_completed` index. Changing the chart
+metric or the comparison line does not issue a request. The two requests are
+separate reads, so figures can briefly differ while new uploads arrive. Hours
+are numbered from the start of the range the browser sends, so the local-time
+charts are exact in any time zone.
 
 Each place's attempt history shows the time from the worker starting an attempt
 to completing it, excluding queue time. Durations are unavailable when either

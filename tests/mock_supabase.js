@@ -157,12 +157,9 @@
           kind = "logs";
           rows = state.logs.filter((row) => matches(row, filters, ranges, choices));
         } else if (table === "monitoring_attempts") {
-          if (!head) kind = timePairs ? "place-times" : "attempts";
-          else if (choices.outcome) kind = "metric-matched";
-          else if (filters.error_code === "BLOCKED") kind = "metric-blocked";
-          else if (filters.error_code === "CONSENT_REQUIRED") kind = "metric-consent";
-          else if (filters.status === "retry_wait") kind = "metric-retry";
-          else kind = "metric-total";
+          // Overview totals come from the monitoring_activity RPC, never from counting rows here.
+          if (head) throw new Error("Unexpected attempt count");
+          kind = timePairs ? "place-times" : "attempts";
           rows = state.attempts.filter((row) => matches(row, filters, ranges, choices) &&
             (!timePairs || timePairs.some((pair) => pair.worker_id === row.worker_id && pair.attempt_id === row.attempt_id)));
         } else {
@@ -184,8 +181,49 @@
       if (name === "monitoring_overview") {
         const rows = state.places.filter((place) => !params.p_worker_id || place.worker_id === params.p_worker_id);
         const queue_counts = {};
-        rows.forEach((place) => { queue_counts[place.queue_status] = (queue_counts[place.queue_status] || 0) + 1; });
-        return submit("overview", params, { data: { workers: state.workers, queue_counts, outcome_counts: {} }, error: null });
+        const outcome_counts = {};
+        rows.forEach((place) => {
+          queue_counts[place.queue_status] = (queue_counts[place.queue_status] || 0) + 1;
+          const outcome = place.outcome ?? "unknown";
+          outcome_counts[outcome] = (outcome_counts[outcome] || 0) + 1;
+        });
+        return submit("overview", params, { data: { workers: state.workers, queue_counts, outcome_counts }, error: null });
+      }
+      if (name === "monitoring_activity") {
+        // Mirrors the SQL: hours are numbered from p_from, the window before it is included.
+        const from = new Date(params.p_from).getTime();
+        const to = new Date(params.p_to).getTime();
+        if (!(to > from) || to - from > 31 * 86_400_000) {
+          return submit("activity", params, { data: null, error: { message: "monitoring_activity needs a window of at most 31 days" } });
+        }
+        const hours = new Map();
+        const durations = [0, 0, 0, 0, 0];
+        const errors = {};
+        let consent = 0;
+        state.attempts.forEach((attempt) => {
+          const completed = new Date(attempt.worker_completed_at).getTime();
+          if (!Number.isFinite(completed) || completed < from - (to - from) || completed >= to) return;
+          if (params.p_worker_id && attempt.worker_id !== params.p_worker_id) return;
+          const i = Math.floor((completed - from) / 3_600_000);
+          const started = attempt.worker_started_at ? new Date(attempt.worker_started_at).getTime() : NaN;
+          const ms = Number.isFinite(started) && started <= completed ? completed - started : null;
+          if (!hours.has(i)) hours.set(i, { i, n: 0, ok: 0, err: 0, blk: 0, retry: 0, timed: 0, ms: 0 });
+          const hour = hours.get(i);
+          hour.n += 1;
+          if (["found", "found_no_phone"].includes(attempt.outcome)) hour.ok += 1;
+          if (attempt.outcome === "lookup_error") hour.err += 1;
+          if (attempt.error_code === "BLOCKED") hour.blk += 1;
+          if (attempt.status === "retry_wait" && attempt.outcome === "lookup_error") hour.retry += 1;
+          if (ms !== null) { hour.timed += 1; hour.ms += ms; }
+          if (i < 0) return;
+          if (ms !== null) durations[ms < 10_000 ? 0 : ms < 20_000 ? 1 : ms < 30_000 ? 2 : ms < 60_000 ? 3 : 4] += 1;
+          if (attempt.error_code) errors[attempt.error_code] = (errors[attempt.error_code] || 0) + 1;
+          if (attempt.error_code === "CONSENT_REQUIRED") consent += 1;
+        });
+        return submit("activity", params, {
+          data: { hours: Array.from(hours.values()).sort((a, b) => a.i - b.i), durations, errors, consent },
+          error: null,
+        });
       }
       if (name !== "monitoring_places_page") throw new Error(`Unexpected RPC: ${name}`);
       const rows = state.places.filter((place) =>

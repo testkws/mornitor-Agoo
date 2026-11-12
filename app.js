@@ -4,6 +4,8 @@
   const PAGE_SIZE = 50;
   const POLL_INTERVAL = 5 * 60_000;
   const HEARTBEAT_WINDOW = 10 * 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
   // Match the monitoring table so the CSV can be loaded into a staging table.
   const PLACE_EXPORT_FIELDS = [
     "worker_id", "osm_id", "source_record", "queue_status", "outcome", "google_proposal", "candidates",
@@ -26,6 +28,8 @@
     lookup_started: "เริ่มค้นหา", lookup_completed: "ค้นหาเสร็จแล้ว", lookup_retry: "ลองค้นหาอีกครั้ง", run_ended: "สิ้นสุดการทำงาน",
     queue_resumed: "กลับมาทำงานต่อ", queue_paused: "หยุดคิวชั่วคราว",
   });
+  // Upper bounds match the buckets returned by the monitoring_activity RPC.
+  const DURATION_LABELS = [t("ต่ำกว่า 10 วินาที"), t("10–20 วินาที"), t("20–30 วินาที"), t("30–60 วินาที"), t("1 นาทีขึ้นไป")];
   const config = window.GOOGLE_MONITORING_CONFIG || {};
   const globalError = document.getElementById("global-error");
   const eventDetails = new Map();
@@ -37,6 +41,11 @@
   let workers = [];
   let activeWorker = "";
   let activeView = "overview";
+  // Overview date range: preset length in days and how many whole periods back.
+  let rangeDays = 7;
+  let rangeOffset = 0;
+  let trendMetric = "attempts";
+  let trendCompare = false;
   let placesOffset = 0;
   let placesTotal = 0;
   let placeFilters = { query: "", outcome: "", queueStatus: "", review: null };
@@ -79,7 +88,10 @@
 
   function formatDuration(startedAt, completedAt) {
     const elapsed = durationMilliseconds(startedAt, completedAt);
-    if (elapsed === null) return "—";
+    return elapsed === null ? "—" : formatElapsed(elapsed);
+  }
+
+  function formatElapsed(elapsed) {
     if (elapsed === 0) return t("0 วินาที");
     if (elapsed < 100) return t("น้อยกว่า 0.1 วินาที");
     const tenths = Math.round(elapsed / 100);
@@ -95,7 +107,7 @@
   function setError(message = "") {
     globalError.classList.remove("warning");
     globalError.textContent = message;
-    const hasData = document.getElementById(`${activeView}-view`).querySelector(".summary-grid, .table-wrap");
+    const hasData = document.getElementById(`${activeView}-view`).querySelector(".dash, .table-wrap");
     const staleNote = document.getElementById("stale-note");
     if (!message) lastSuccessfulUpdate = new Date();
     staleNote.textContent = `${t("ข้อมูลบางส่วนอาจไม่เป็นปัจจุบัน")}${lastSuccessfulUpdate
@@ -260,47 +272,125 @@
     syncWorkerPicker(document.getElementById("log-worker"));
   }
 
-  async function countAttempts(workerId, windowStart, windowEnd, filter) {
+  // ---- Overview: date range ----
+
+  // 24 hours is a rolling window of hourly points. 7 and 30 days cover today
+  // plus the earlier local calendar days, as daily points. Earlier periods
+  // (rangeOffset > 0) are always whole.
+  function rangeWindow(now = Date.now()) {
+    if (rangeDays === 1) {
+      const top = new Date(now);
+      top.setMinutes(0, 0, 0);
+      const start = top.getTime() - 23 * HOUR - rangeOffset * DAY;
+      return { start, end: rangeOffset ? start + DAY : now, buckets: 24, unit: "hour" };
+    }
+    const midnight = (days) => {
+      const date = new Date(now);
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() + days);
+      return date.getTime();
+    };
+    return {
+      start: midnight(1 - rangeDays * (rangeOffset + 1)),
+      end: rangeOffset ? midnight(1 - rangeDays * rangeOffset) : now,
+      buckets: rangeDays,
+      unit: "day",
+    };
+  }
+
+  function rangeText(range) {
+    const format = new Intl.DateTimeFormat(I18N.locale, range.unit === "hour"
+      ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+      : { year: "numeric", month: "short", day: "numeric" });
+    // A whole earlier period ends at midnight; name the last day it covers.
+    const last = range.unit === "day" && rangeOffset ? range.end - 1 : range.end;
+    return `${format.format(range.start)} → ${format.format(last)}`;
+  }
+
+  function syncRangeControls(range = rangeWindow()) {
+    const label = document.getElementById("range-label");
+    const text = rangeText(range);
+    if (label.textContent !== text) label.textContent = text;
+    document.getElementById("range-preset").value = String(rangeDays);
+    document.getElementById("range-next").disabled = rangeOffset === 0;
+    const hidden = activeView !== "overview";
+    document.getElementById("range-stepper").hidden = hidden;
+    document.getElementById("range-preset-field").hidden = hidden;
+  }
+
+  function setRange(days, offset) {
+    rangeDays = days;
+    rangeOffset = Math.max(0, offset);
+    syncRangeControls();
+    refreshCurrent();
+  }
+
+  // ---- Overview: activity aggregates ----
+
+  const emptyBucket = () => ({ n: 0, ok: 0, err: 0, blk: 0, retry: 0, timed: 0, ms: 0 });
+  const wholeCount = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0);
+
+  function addBucket(target, row) {
+    Object.keys(target).forEach((key) => { target[key] += wholeCount(row[key]); });
+  }
+
+  function bucketOf(range, time) {
+    if (range.unit === "hour") return Math.floor((time - range.start) / HOUR);
+    const day = new Date(time);
+    day.setHours(0, 0, 0, 0);
+    return Math.round((day.getTime() - range.start) / DAY);
+  }
+
+  // The RPC numbers hours from the start of the range; negative hours belong to
+  // the equal-length period before it. Days and weekdays use local time.
+  function summarizeActivity(data, range) {
+    const current = emptyBucket();
+    const previous = emptyBucket();
+    const series = Array.from({ length: range.buckets }, emptyBucket);
+    const before = Array.from({ length: range.buckets }, emptyBucket);
+    const heat = Array.from({ length: 24 }, () => Array(7).fill(0));
+    data.hours.forEach((row) => {
+      const index = Number(row?.i);
+      if (!Number.isInteger(index)) return;
+      const time = range.start + index * HOUR;
+      const bucket = bucketOf(range, time);
+      if (index >= 0) {
+        addBucket(current, row);
+        if (series[bucket]) addBucket(series[bucket], row);
+        const local = new Date(time);
+        heat[local.getHours()][(local.getDay() + 6) % 7] += wholeCount(row.n);
+      } else {
+        addBucket(previous, row);
+        if (before[bucket + range.buckets]) addBucket(before[bucket + range.buckets], row);
+      }
+    });
+    const errors = Object.entries(data.errors && typeof data.errors === "object" ? data.errors : {})
+      .map(([code, count]) => ({ code, count: wholeCount(count) }))
+      .filter((entry) => entry.count)
+      .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+    return {
+      range, current, previous, series, before, heat, errors,
+      durations: DURATION_LABELS.map((_, index) => wholeCount(data.durations?.[index])),
+      consent: wholeCount(data.consent),
+    };
+  }
+
+  async function fetchActivity(workerId, range) {
     try {
-      let query = client.from("monitoring_attempts")
-        .select("attempt_id", { count: "exact", head: true })
-        .gte("worker_completed_at", windowStart)
-        .lte("worker_completed_at", windowEnd);
-      if (workerId) query = query.eq("worker_id", workerId);
-      if (filter === "matched") query = query.in("outcome", ["found", "found_no_phone"]);
-      if (filter === "blocked") query = query.eq("error_code", "BLOCKED");
-      if (filter === "consent") query = query.eq("error_code", "CONSENT_REQUIRED");
-      if (filter === "retry") query = query.eq("status", "retry_wait").eq("outcome", "lookup_error");
-      const result = await query;
-      return !result.error && Number.isInteger(result.count) && result.count >= 0 ? result.count : null;
+      const result = await client.rpc("monitoring_activity", {
+        p_from: new Date(range.start).toISOString(),
+        p_to: new Date(range.end).toISOString(),
+        p_worker_id: workerId || null,
+      });
+      return !result.error && Array.isArray(result.data?.hours) ? summarizeActivity(result.data, range) : null;
     } catch {
       return null;
     }
   }
 
-  async function fetchAttemptSummary(workerId, isCurrent) {
-    const end = Date.now();
-    const start = new Date(end - 24 * 60 * 60 * 1000).toISOString();
-    const until = new Date(end).toISOString();
-    const [matched, blocked, consent, retry] = await Promise.all(
-      ["matched", "blocked", "consent", "retry"].map((filter) => countAttempts(workerId, start, until, filter)),
-    );
-    if (!isCurrent()) return null;
-    // Count the denominator last so newly uploaded historical attempts do not inflate rates.
-    const total = await countAttempts(workerId, start, until, "total");
-    if (!isCurrent()) return null;
-    const summary = { matched, blocked, consent, retry, total };
-    if (total !== null) {
-      for (const key of ["matched", "blocked", "consent", "retry"]) {
-        if (summary[key] !== null && summary[key] > total) summary[key] = null;
-      }
-    }
-    return summary;
-  }
-
   function rate(numerator, denominator) {
-    if (numerator === null || denominator === null) return { value: "—", detail: t("ไม่มีข้อมูลจำนวนครั้ง") };
-    if (!denominator) return { value: "—", detail: t("ไม่มีการลองตรวจสอบที่เสร็จแล้ว") };
+    if (!denominator) return { value: "—", detail: t("ไม่มีการลองตรวจสอบที่เสร็จแล้ว"), percent: null };
+    if (numerator > denominator) return { value: "—", detail: t("ไม่มีข้อมูลจำนวนครั้ง"), percent: null };
     return {
       value: `${(numerator * 100 / denominator).toFixed(1)}%`,
       detail: t("{a} จาก {b} ครั้ง", { a: formatCount(numerator), b: formatCount(denominator) }),
@@ -308,80 +398,449 @@
     };
   }
 
-  function summaryCard(key, label, value, subvalue, detail, symbol, tone, percent) {
-    const card = el("article", `summary-card ${tone}`);
-    card.dataset.metric = key;
-    const header = el("div", "summary-card-head");
-    const icon = el("span", "summary-icon", symbol);
-    icon.setAttribute("aria-hidden", "true");
-    header.append(el("h3", "summary-label", label), icon);
-    card.append(header, el("div", "summary-value", value), el("p", "summary-subvalue", subvalue));
-    if (percent !== undefined) {
-      const meter = el("div", "summary-meter");
-      meter.setAttribute("aria-hidden", "true");
-      const fill = el("span");
-      fill.style.width = `${percent}%`;
-      meter.append(fill);
-      card.append(meter);
-    }
-    card.append(el("p", "summary-detail", detail));
-    return card;
+  const averageDuration = (bucket) => (bucket.timed ? bucket.ms / bucket.timed : null);
+  const secondsText = (milliseconds) => t("{n} วินาที", { n: (milliseconds / 1000).toFixed(1) });
+
+  // ---- Overview: cards ----
+
+  function card(key, titleText, subtitle) {
+    const section = el("section", "card");
+    section.dataset.chart = key;
+    const title = el("h3", "card-title", titleText);
+    title.id = `${key}-card-title`;
+    section.setAttribute("aria-labelledby", title.id);
+    const head = el("div", "card-head");
+    head.append(title);
+    section.append(head);
+    if (subtitle) section.append(el("p", "card-sub", subtitle));
+    return { section, head };
   }
 
-  function attemptChart(attempts) {
-    const section = el("section", "chart-panel");
-    section.dataset.chart = "attempts";
-    const title = el("h3", "chart-title", t("ผลการลองตรวจสอบ"));
-    title.id = "attempt-chart-title";
-    section.setAttribute("aria-labelledby", title.id);
-    section.append(title, el("p", "chart-description", t("การลองตรวจสอบที่เสร็จแล้ว · 24 ชั่วโมงล่าสุด")));
+  // The arrow and sign carry the direction; colour only says whether it is good.
+  function deltaNode(difference, text, upIsGood) {
+    if (difference === null || !Number.isFinite(difference)) return null;
+    // A change too small to show is no change: never "−0.0 s" in green.
+    const shown = text(Math.abs(difference));
+    const direction = shown === text(0) ? "flat" : difference > 0 ? "up" : "down";
+    const tone = direction === "flat" ? "flat" : (direction === "up") === upIsGood ? "good" : "bad";
+    const node = el("p", `metric-delta ${tone}`);
+    node.title = t("เทียบกับช่วงก่อนหน้า");
+    const arrow = el("span", "metric-delta-arrow", direction === "up" ? "↑" : direction === "down" ? "↓" : "→");
+    arrow.setAttribute("aria-hidden", "true");
+    const sign = direction === "up" ? "+" : direction === "down" ? "−" : "";
+    node.append(arrow, el("span", "", `${sign}${shown}`),
+      el("span", "sr-only", ` ${t("เทียบกับช่วงก่อนหน้า")}`));
+    return node;
+  }
 
-    if (attempts.matched === null || attempts.total === null) {
-      section.append(el("p", "chart-empty", t("ไม่มีข้อมูลจำนวนครั้ง ระบบจะลองใหม่อัตโนมัติ")));
+  function metricRow(key, label, value, note, delta) {
+    const row = el("div", "metric-row");
+    row.dataset.metric = key;
+    const text = el("div", "metric-text");
+    text.append(el("p", "metric-label", label), el("p", "summary-value", value));
+    if (note) text.append(el("p", "metric-note", note));
+    row.append(text);
+    if (delta) row.append(delta);
+    return row;
+  }
+
+  function comparisonNote(range) {
+    return range.unit === "hour" ? t("เทียบกับ 24 ชั่วโมงก่อนหน้า")
+      : t("เทียบกับ {n} วันก่อนหน้า", { n: range.buckets });
+  }
+
+  function keyMetricsCard(activity, range) {
+    const { section, head } = card("metrics", t("ตัวชี้วัดหลัก"));
+    head.append(el("span", "card-tag", comparisonNote(range)));
+    const rows = el("div", "metric-rows");
+    if (!activity) {
+      const missing = t("ไม่มีข้อมูลจำนวนครั้ง");
+      rows.append(metricRow("attempts", t("การลองตรวจสอบที่เสร็จแล้ว"), "—", missing),
+        metricRow("success", t("อัตราความสำเร็จ"), "—", missing),
+        metricRow("duration", t("เวลาตรวจสอบเฉลี่ย"), "—", missing));
+      section.append(rows);
       return section;
     }
-    if (!attempts.total) {
-      section.append(el("p", "chart-empty", t("ไม่มีการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงที่ผ่านมา")));
-      return section;
-    }
-
-    const matched = attempts.matched;
-    const other = attempts.total - matched;
-    const layout = el("div", "chart-donut-layout");
-    const donut = el("div", "chart-donut");
-    donut.style.setProperty("--matched-share", `${matched * 100 / attempts.total}%`);
-    const center = el("div", "chart-donut-center");
-    center.append(el("strong", "", formatCount(attempts.total)), el("span", "", t("เสร็จแล้ว")));
-    donut.append(center);
-
-    const legend = el("ul", "chart-legend");
-    [
-      { key: "matched", label: t("จับคู่ได้"), count: matched },
-      { key: "other", label: t("ผลลัพธ์อื่น"), count: other },
-    ].forEach(({ key, label, count }) => {
-      const item = el("li", "chart-legend-item");
-      item.dataset.result = key;
-      const marker = el("span", `chart-legend-marker ${key}`);
-      marker.setAttribute("aria-hidden", "true");
-      const text = el("div", "chart-legend-text");
-      text.append(el("span", "chart-legend-label", label),
-        el("span", "chart-legend-value", `${formatCount(count)} · ${(count * 100 / attempts.total).toFixed(1)}%`));
-      item.append(marker, text);
-      legend.append(item);
-    });
-    layout.append(donut, legend);
-    section.append(layout, el("p", "chart-note", t("ผลที่จับคู่ได้รวมทั้งรายการที่มีและไม่มีเบอร์โทร")));
+    const { current, previous } = activity;
+    const success = rate(current.ok, current.n);
+    const earlier = rate(previous.ok, previous.n);
+    const average = averageDuration(current);
+    const earlierAverage = averageDuration(previous);
+    rows.append(
+      metricRow("attempts", t("การลองตรวจสอบที่เสร็จแล้ว"), formatCount(current.n),
+        t("จับคู่ได้ {n} ครั้ง", { n: formatCount(current.ok) }),
+        deltaNode(current.n - previous.n, formatCount, true)),
+      metricRow("success", t("อัตราความสำเร็จ"), success.value, success.detail,
+        deltaNode(success.percent === null || earlier.percent === null ? null : success.percent - earlier.percent,
+          (value) => t("{n} จุด", { n: value.toFixed(1) }), true)),
+      metricRow("duration", t("เวลาตรวจสอบเฉลี่ย"), average === null ? "—" : formatElapsed(average),
+        current.timed ? t("จาก {n} ครั้งที่มีการบันทึกเวลา", { n: formatCount(current.timed) }) : t("ยังไม่มีการบันทึกเวลา"),
+        deltaNode(average === null || earlierAverage === null ? null : average - earlierAverage, secondsText, false)),
+    );
+    section.append(rows);
     return section;
   }
 
-  function queueChart(pending, scheduled, running) {
-    const section = el("section", "chart-panel");
-    section.dataset.chart = "queue";
-    const title = el("h3", "chart-title", t("ภาพรวมคิว"));
-    title.id = "queue-chart-title";
-    section.setAttribute("aria-labelledby", title.id);
-    section.append(title, el("p", "chart-description", t("จำนวนล่าสุดที่อัปโหลด · ปรับสเกลตามกลุ่มที่มีจำนวนมากที่สุด")));
+  // ---- Overview: activity over time ----
 
+  const TREND_METRICS = {
+    attempts: { label: t("การลองตรวจสอบที่เสร็จแล้ว"), value: (bucket) => bucket.n, text: formatCount, whole: true },
+    matched: { label: t("จับคู่ได้"), value: (bucket) => bucket.ok, text: formatCount, whole: true },
+    success: {
+      label: t("อัตราความสำเร็จ"), value: (bucket) => (bucket.n ? Math.min(100, bucket.ok * 100 / bucket.n) : null),
+      text: (value) => `${value.toFixed(1)}%`, tick: (value) => `${value}%`, fixed: [0, 25, 50, 75, 100],
+    },
+    errors: { label: t("ข้อผิดพลาดในการค้นหา", null, "Lookup errors"), value: (bucket) => bucket.err, text: formatCount, whole: true },
+    duration: {
+      label: t("เวลาตรวจสอบเฉลี่ย"), value: (bucket) => (bucket.timed ? bucket.ms / bucket.timed / 1000 : null),
+      text: (value) => formatElapsed(value * 1000), tick: (value) => t("{n} วินาที", { n: value }),
+    },
+  };
+
+  function axisTicks(peak, whole) {
+    if (!(peak > 0)) return [0, 1];
+    const rough = peak / 4;
+    const power = 10 ** Math.floor(Math.log10(rough));
+    const step = Math.max(whole ? 1 : 0, (whole ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10])
+      .map((multiple) => multiple * power).find((candidate) => candidate >= rough));
+    const count = Math.ceil(peak / step - 1e-9);
+    return Array.from({ length: count + 1 }, (_, index) => Number((index * step).toFixed(6)));
+  }
+
+  function bucketLabels(range) {
+    const hourly = range.unit === "hour";
+    const short = new Intl.DateTimeFormat(I18N.locale, hourly ? { hour: "2-digit", minute: "2-digit" } : { month: "short", day: "numeric" });
+    const long = new Intl.DateTimeFormat(I18N.locale, hourly
+      ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+      : { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+    return Array.from({ length: range.buckets }, (_, index) => {
+      const date = new Date(range.start + (hourly ? index * HOUR : 0));
+      if (!hourly) date.setDate(date.getDate() + index);
+      return { short: short.format(date), long: long.format(date) };
+    });
+  }
+
+  function svgNode(name, attributes) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, value));
+    return node;
+  }
+
+  function drawTrend(body, activity) {
+    const metric = TREND_METRICS[trendMetric];
+    const labels = bucketLabels(activity.range);
+    const values = activity.series.map(metric.value);
+    const earlier = trendCompare ? activity.before.map(metric.value) : null;
+    const known = values.concat(earlier || []).filter((value) => value !== null);
+    const ticks = metric.fixed || axisTicks(Math.max(0, ...known), metric.whole);
+    const top = ticks[ticks.length - 1];
+    const compact = top >= 10_000 ? new Intl.NumberFormat(I18N.locale, { notation: "compact" }) : null;
+    const tickText = (value) => (metric.tick ? metric.tick(value) : compact ? compact.format(value) : formatCount(value));
+    const valueText = (value) => (value === null ? "—" : metric.text(value));
+    const x = (index) => (values.length > 1 ? index * 100 / (values.length - 1) : 50);
+    const y = (value) => 100 - value * 100 / top;
+    const path = (series) => series.reduce((d, value, index) => (value === null ? d
+      : `${d}${index === 0 || series[index - 1] === null ? "M" : "L"}${x(index).toFixed(2)} ${y(value).toFixed(2)}`), "");
+
+    const chart = el("div", "trend-chart");
+    const yAxis = el("div", "trend-yaxis");
+    yAxis.setAttribute("aria-hidden", "true");
+    ticks.forEach((tick) => yAxis.append(el("span", "", tickText(tick))));
+
+    const plot = el("div", "trend-plot");
+    plot.id = "trend-plot";
+    plot.tabIndex = 0;
+    plot.setAttribute("role", "group");
+    plot.setAttribute("aria-label", t("{metric} · {range} ใช้ปุ่มลูกศรซ้ายขวาเพื่ออ่านค่าแต่ละช่วง",
+      { metric: metric.label, range: rangeText(activity.range) }));
+    const svg = svgNode("svg", { viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
+    ticks.forEach((tick) => svg.append(svgNode("line", { class: tick ? "trend-grid" : "trend-grid base", x1: 0, x2: 100, y1: y(tick), y2: y(tick) })));
+    if (earlier) svg.append(svgNode("path", { class: "trend-line earlier", d: path(earlier) }));
+    svg.append(svgNode("path", { class: "trend-line", d: path(values) }));
+    plot.append(svg);
+
+    const dot = (index, value, className) => {
+      const mark = el("span", className);
+      mark.style.left = `${x(index)}%`;
+      mark.style.top = `${y(value)}%`;
+      return mark;
+    };
+    const last = values.reduce((found, value, index) => (value === null ? found : index), -1);
+    values.forEach((value, index) => {
+      const alone = value !== null && (values[index - 1] ?? null) === null && (values[index + 1] ?? null) === null;
+      if (alone || index === last) plot.append(dot(index, value, "trend-dot"));
+    });
+
+    const cursor = el("div", "trend-cursor");
+    const marker = el("span", "trend-dot active");
+    const tip = el("div", "trend-tip");
+    tip.setAttribute("aria-live", "polite");
+    [cursor, marker, tip].forEach((node) => { node.hidden = true; });
+    plot.append(cursor, marker, tip);
+
+    let active = -1;
+    const show = (index) => {
+      active = Math.min(values.length - 1, Math.max(0, index));
+      cursor.hidden = false;
+      cursor.style.left = `${x(active)}%`;
+      marker.hidden = values[active] === null;
+      if (values[active] !== null) {
+        marker.style.left = `${x(active)}%`;
+        marker.style.top = `${y(values[active])}%`;
+      }
+      const row = (className, value, label) => {
+        const line = el("p", "trend-tip-row");
+        const key = el("i", className);
+        key.setAttribute("aria-hidden", "true");
+        line.append(key, el("strong", "", valueText(value)), el("span", "", label));
+        return line;
+      };
+      tip.replaceChildren(el("p", "trend-tip-title", labels[active].long), row("trend-key", values[active], metric.label));
+      if (earlier) tip.append(row("trend-key earlier", earlier[active], t("ช่วงก่อนหน้า")));
+      tip.hidden = false;
+      tip.style.left = `${x(active)}%`;
+      tip.classList.toggle("flip", x(active) > 55);
+    };
+    const hide = () => {
+      active = -1;
+      [cursor, marker, tip].forEach((node) => { node.hidden = true; });
+    };
+    const point = (event) => {
+      const box = plot.getBoundingClientRect();
+      if (box.width) show(Math.round((event.clientX - box.left) / box.width * (values.length - 1)));
+    };
+    // The crosshair follows the pointer; a tap shows the nearest point.
+    ["pointermove", "pointerdown"].forEach((name) => plot.addEventListener(name, point));
+    // Some browsers report only one of these when the pointer leaves.
+    ["pointerleave", "mouseleave", "pointercancel"].forEach((name) => plot.addEventListener(name, () => {
+      if (document.activeElement !== plot) hide();
+    }));
+    plot.addEventListener("focus", () => { if (active < 0) show(Math.max(0, last)); });
+    plot.addEventListener("blur", hide);
+    plot.addEventListener("keydown", (event) => {
+      const next = { ArrowLeft: active - 1, ArrowRight: active + 1, Home: 0, End: values.length - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      show(next);
+    });
+
+    const xAxis = el("div", "trend-xaxis");
+    xAxis.setAttribute("aria-hidden", "true");
+    const every = Math.ceil(values.length / 7);
+    labels.forEach((label, index) => {
+      if ((values.length - 1 - index) % every) return;
+      const text = el("span", index === 0 ? "first" : index === values.length - 1 ? "last" : "", label.short);
+      text.style.left = `${x(index)}%`;
+      xAxis.append(text);
+    });
+    chart.append(yAxis, plot, xAxis);
+
+    const content = [chart];
+    if (earlier) {
+      const legend = el("ul", "trend-legend");
+      [["trend-key", t("ช่วงนี้")], ["trend-key earlier", t("ช่วงก่อนหน้า")]].forEach(([className, label]) => {
+        const item = el("li");
+        const key = el("i", className);
+        key.setAttribute("aria-hidden", "true");
+        item.append(key, el("span", "", label));
+        legend.append(item);
+      });
+      content.push(legend);
+    }
+    const details = el("details", "chart-table");
+    details.id = "trend-table";
+    details.open = body.querySelector("#trend-table")?.open === true;
+    details.append(el("summary", "", t("ดูเป็นตาราง")), makeTable(
+      [t("ช่วงเวลา"), metric.label].concat(earlier ? [t("ช่วงก่อนหน้า")] : []),
+      labels.map((label, index) => [label.long, valueText(values[index])].concat(earlier ? [valueText(earlier[index])] : [])),
+      t("ตาราง{name}", { name: metric.label }),
+    ));
+    content.push(details);
+    body.replaceChildren(...content);
+  }
+
+  function trendCard(activity) {
+    const { section, head } = card("trend", t("กิจกรรมตามช่วงเวลา"));
+    const tools = el("div", "card-tools");
+    const field = el("label", "chip-field");
+    field.append(el("span", "sr-only", t("ตัวชี้วัดในกราฟ")));
+    const picker = el("select");
+    picker.id = "trend-metric";
+    Object.entries(TREND_METRICS).forEach(([key, metric]) => {
+      const option = el("option", "", metric.label);
+      option.value = key;
+      picker.append(option);
+    });
+    picker.value = trendMetric;
+    field.append(picker);
+    const compare = el("label", "chip-check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.id = "trend-compare";
+    box.checked = trendCompare;
+    compare.append(box, el("span", "", t("แสดงช่วงก่อนหน้า")));
+    tools.append(field, compare);
+    head.append(tools);
+    const body = el("div", "trend-body");
+    section.append(body);
+    if (!activity) {
+      picker.disabled = true;
+      box.disabled = true;
+      body.append(el("p", "chart-empty", t("ไม่มีข้อมูลกิจกรรม ระบบจะลองใหม่อัตโนมัติ")));
+      return section;
+    }
+    drawTrend(body, activity);
+    picker.addEventListener("change", () => { trendMetric = picker.value; drawTrend(body, activity); });
+    box.addEventListener("change", () => { trendCompare = box.checked; drawTrend(body, activity); });
+    return section;
+  }
+
+  // ---- Overview: busiest times and inspection time ----
+
+  function heatmapCard(activity) {
+    const { section } = card("heatmap", t("ช่วงเวลาที่ทำงานมากที่สุด"),
+      t("การลองตรวจสอบที่เสร็จแล้ว แยกตามวันและชั่วโมง · เวลาท้องถิ่นของเบราว์เซอร์"));
+    if (!activity || !activity.current.n) {
+      section.append(el("p", "chart-empty", activity ? t("ไม่มีการลองตรวจสอบที่เสร็จแล้วในช่วงนี้")
+        : t("ไม่มีข้อมูลกิจกรรม ระบบจะลองใหม่อัตโนมัติ")));
+      return section;
+    }
+    const monday = new Date(2024, 0, 1);
+    const weekday = (index, width) => new Intl.DateTimeFormat(I18N.locale, { weekday: width })
+      .format(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index));
+    const peak = Math.max(...activity.heat.flat());
+    const table = el("table", "heat");
+    table.append(el("caption", "sr-only", t("จำนวนการลองตรวจสอบที่เสร็จแล้ว แยกตามวันในสัปดาห์และชั่วโมง")));
+    const headRow = el("tr");
+    headRow.append(el("td"));
+    for (let day = 0; day < 7; day += 1) {
+      const cell = el("th", "", weekday(day, "short"));
+      cell.scope = "col";
+      headRow.append(cell);
+    }
+    const thead = el("thead");
+    thead.append(headRow);
+    const tbody = el("tbody");
+    activity.heat.forEach((counts, hour) => {
+      const row = el("tr");
+      const label = el("th", "", `${String(hour).padStart(2, "0")}:00`);
+      label.scope = "row";
+      row.append(label);
+      counts.forEach((count, day) => {
+        // Five steps of one hue; zero keeps the empty wash.
+        const cell = el("td", `heat-${count ? Math.max(1, Math.ceil(count * 5 / peak)) : 0}`, formatCount(count));
+        cell.dataset.day = String(day);
+        cell.dataset.hour = String(hour);
+        cell.title = t("{day} {hour}:00 · {n} ครั้ง", { day: weekday(day, "long"), hour: String(hour).padStart(2, "0"), n: formatCount(count) });
+        row.append(cell);
+      });
+      tbody.append(row);
+    });
+    table.append(thead, tbody);
+    const scale = el("div", "heat-scale");
+    scale.setAttribute("aria-hidden", "true");
+    scale.append(el("span", "", "0"), el("i"), el("span", "", formatCount(peak)));
+    section.append(table, scale);
+    return section;
+  }
+
+  function durationCard(activity) {
+    const { section } = card("durations", t("เวลาตรวจสอบ"),
+      t("ตั้งแต่เวิร์กเกอร์เริ่มจนเสร็จ ไม่นับเวลารอในคิว"));
+    const timed = activity ? activity.durations.reduce((sum, count) => sum + count, 0) : 0;
+    if (!timed) {
+      section.append(el("p", "chart-empty", activity ? t("ยังไม่มีการบันทึกเวลาในช่วงนี้")
+        : t("ไม่มีข้อมูลกิจกรรม ระบบจะลองใหม่อัตโนมัติ")));
+      return section;
+    }
+    const average = averageDuration(activity.current);
+    const earlier = averageDuration(activity.previous);
+    const layout = el("div", "donut-layout");
+    const donut = el("div", "donut");
+    const svg = svgNode("svg", { viewBox: "0 0 120 120", "aria-hidden": "true" });
+    const radius = 50;
+    const around = 2 * Math.PI * radius;
+    const gap = 1.4;
+    let offset = 0;
+    activity.durations.forEach((count, index) => {
+      const length = count / timed * around;
+      // Leave a surface gap between segments instead of drawing a border.
+      if (length > gap) {
+        svg.append(svgNode("circle", {
+          class: `donut-part ramp-${index + 1}`, cx: 60, cy: 60, r: radius,
+          "stroke-dasharray": `${(length - gap).toFixed(2)} ${(around - length + gap).toFixed(2)}`,
+          "stroke-dashoffset": (-offset - gap / 2).toFixed(2),
+        }));
+      }
+      offset += length;
+    });
+    const center = el("div", "donut-center");
+    center.dataset.metric = "average";
+    center.append(el("span", "donut-caption", t("เวลาเฉลี่ย")),
+      el("strong", "summary-value", average === null ? "—" : formatElapsed(average)));
+    const delta = deltaNode(average === null || earlier === null ? null : average - earlier, secondsText, false);
+    if (delta) center.append(delta);
+    donut.append(svg, center);
+    const legend = el("ul", "donut-legend");
+    activity.durations.forEach((count, index) => {
+      const item = el("li");
+      item.dataset.bucket = String(index);
+      item.title = t("{n} ครั้ง", { n: formatCount(count) });
+      const swatch = el("i", `swatch ramp-${index + 1}`);
+      swatch.setAttribute("aria-hidden", "true");
+      item.append(swatch, el("span", "donut-label", DURATION_LABELS[index]),
+        el("span", "donut-count", formatCount(count)), el("strong", "", `${(count * 100 / timed).toFixed(1)}%`));
+      legend.append(item);
+    });
+    layout.append(donut, legend);
+    section.append(layout);
+    return section;
+  }
+
+  // ---- Overview: errors, queue and coverage ----
+
+  function errorsCard(activity) {
+    const { section } = card("errors", t("ข้อผิดพลาดและการบล็อก"));
+    const rows = el("div", "metric-rows compact");
+    if (!activity) {
+      const missing = t("ไม่มีข้อมูลจำนวนครั้ง");
+      rows.append(metricRow("errors", t("ข้อผิดพลาดในการค้นหา", null, "Lookup errors"), "—", missing),
+        metricRow("blocked", t("CAPTCHA / การบล็อก"), "—", missing),
+        metricRow("retry", t("อัตราการลองซ้ำ"), "—", missing));
+      section.append(rows);
+      return section;
+    }
+    const { current, previous } = activity;
+    const retry = rate(current.retry, current.n);
+    rows.append(
+      metricRow("errors", t("ข้อผิดพลาดในการค้นหา", null, "Lookup errors"), formatCount(current.err), null,
+        deltaNode(current.err - previous.err, formatCount, false)),
+      metricRow("blocked", t("CAPTCHA / การบล็อก"), formatCount(current.blk),
+        t("ต้องขอความยินยอม {n} ครั้ง", { n: formatCount(activity.consent) }),
+        deltaNode(current.blk - previous.blk, formatCount, false)),
+      metricRow("retry", t("อัตราการลองซ้ำ"), retry.value, retry.detail),
+    );
+    section.append(rows, el("h4", "card-subtitle", t("รหัสข้อผิดพลาดที่พบบ่อย")));
+    if (!activity.errors.length) {
+      section.append(el("p", "card-note", t("ไม่มีรหัสข้อผิดพลาดในช่วงนี้")));
+      return section;
+    }
+    const list = el("ul", "code-list");
+    activity.errors.slice(0, 5).forEach(({ code, count }) => {
+      const item = el("li");
+      item.append(el("code", "", code), el("strong", "", formatCount(count)));
+      list.append(item);
+    });
+    section.append(list);
+    return section;
+  }
+
+  function queueCard(pending, scheduled, running, activity) {
+    const { section } = card("queue", t("ภาพรวมคิว"), t("ภาพสถานะล่าสุดที่อัปโหลด ไม่ขึ้นกับช่วงวันที่"));
+    section.dataset.metric = "queue";
+    const headline = el("div", "card-figure");
+    headline.append(el("p", "summary-value", formatCount(pending + scheduled)),
+      el("p", "metric-note", t("{pending} รอดำเนินการ · {scheduled} กำหนดไว้", { pending: formatCount(pending), scheduled: formatCount(scheduled) })));
     const rows = [
       { key: "pending", label: t("รอดำเนินการ"), count: pending },
       { key: "scheduled", label: t("กำหนดไว้"), count: scheduled },
@@ -402,13 +861,72 @@
       item.append(heading, track);
       list.append(item);
     });
-    section.append(list, el("p", "chart-note", t("รายการที่กำหนดไว้รวมการตรวจซ้ำในอนาคต")));
+    section.append(headline, list, el("p", "card-note", t("{n} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต", { n: formatCount(running) })));
+    // A rough pace: attempts include rechecks, so pending places can take longer.
+    const days = activity && !rangeOffset ? (activity.range.end - activity.range.start) / DAY : 0;
+    const pace = days ? activity.current.n / Math.max(days, 1 / 24) : 0;
+    if (pending && pace >= 1) {
+      const estimate = el("p", "card-note");
+      estimate.dataset.metric = "eta";
+      estimate.textContent = t("ที่อัตราของช่วงนี้ (ประมาณ {pace} ครั้งต่อวัน) รายการที่รอดำเนินการใช้เวลาอีกราว {days} วัน", {
+        pace: formatCount(Math.round(pace)), days: formatCount(Math.max(1, Math.ceil(pending / pace))),
+      });
+      section.append(estimate);
+    }
     return section;
   }
 
-  function workerStat(label, value, detail) {
+  function coverageCard(outcomes) {
+    const { section } = card("coverage", t("ความครอบคลุมของสถานที่"), t("ผลลัพธ์ล่าสุดของแต่ละสถานที่ ไม่ขึ้นกับช่วงวันที่"));
+    const counts = Object.fromEntries(Object.entries(outcomes || {}).map(([key, value]) => [key, wholeCount(value)]));
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    if (!total) {
+      section.append(el("p", "chart-empty", t("ยังไม่มีรายงานสถานที่")));
+      return section;
+    }
+    const named = ["found", "found_no_phone", "ambiguous", "not_found"];
+    const parts = named.map((key) => ({ key, label: STATUS_LABELS[key], count: counts[key] || 0 }));
+    const resolved = parts.reduce((sum, part) => sum + part.count, 0);
+    parts.push({ key: "none", label: t("ยังไม่มีผลลัพธ์"), count: total - resolved });
+    const share = (count) => count * 100 / total;
+    const headline = el("div", "card-figure");
+    headline.dataset.metric = "coverage";
+    headline.append(el("p", "summary-value", `${share(resolved).toFixed(1)}%`),
+      el("p", "metric-note", t("{a} จาก {b} สถานที่มีผลลัพธ์แล้ว", { a: formatCount(resolved), b: formatCount(total) })));
+    const bar = el("div", "stack-bar");
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", parts.map((part) => `${part.label} ${formatCount(part.count)} (${share(part.count).toFixed(1)}%)`).join(", "));
+    const legend = el("ul", "stack-legend");
+    parts.forEach((part) => {
+      if (part.count) {
+        const block = el("span", `stack-part outcome-${part.key}`, share(part.count) >= 9 ? `${Math.round(share(part.count))}%` : "");
+        block.style.flexGrow = String(part.count);
+        block.title = `${part.label} · ${formatCount(part.count)} (${share(part.count).toFixed(1)}%)`;
+        bar.append(block);
+      }
+      const item = el("li");
+      item.dataset.outcome = part.key;
+      const swatch = el("i", `swatch outcome-${part.key}`);
+      swatch.setAttribute("aria-hidden", "true");
+      item.append(swatch, el("span", "stack-label", part.label), el("span", "stack-count", formatCount(part.count)),
+        el("strong", "", `${share(part.count).toFixed(1)}%`));
+      legend.append(item);
+    });
+    section.append(headline, bar, legend);
+    return section;
+  }
+
+  function workerStat(label, value, detail, percent) {
     const stat = el("div", "worker-stat");
     stat.append(el("div", "worker-stat-label", label), el("div", "worker-stat-value", value));
+    if (percent !== undefined) {
+      const meter = el("div", "meter");
+      meter.setAttribute("aria-hidden", "true");
+      const fill = el("span");
+      fill.style.width = `${percent}%`;
+      meter.append(fill);
+      stat.append(meter);
+    }
     if (detail) stat.append(el("div", "worker-stat-detail", detail));
     return stat;
   }
@@ -422,11 +940,12 @@
   async function renderOverview(isCurrent) {
     const container = document.getElementById("overview-view");
     const workerId = activeWorker;
-    const [result, attempts] = await Promise.all([
+    const range = rangeWindow();
+    const [result, activity] = await Promise.all([
       client.rpc("monitoring_overview", { p_worker_id: workerId || null }),
-      fetchAttemptSummary(workerId, isCurrent),
+      fetchActivity(workerId, range),
     ]);
-    if (!isCurrent() || !attempts) return "";
+    if (!isCurrent()) return "";
     const data = resultOrThrow(result);
     if (!Array.isArray(data?.workers)) throw new Error(t("ไม่มีข้อมูลเวิร์กเกอร์"));
     workers = data.workers;
@@ -437,53 +956,39 @@
       return "";
     }
     populateWorkers();
+    syncRangeControls(range);
     const chosenWorkers = workerId ? workers.filter((worker) => worker.worker_id === workerId) : workers;
     const now = Date.now();
     const reporting = chosenWorkers.filter((worker) => heartbeatRecent(worker, now)).length;
     const paused = chosenWorkers.filter((worker) => worker.current_state?.pause_reason).length;
     const counts = data.queue_counts || {};
-    const pending = Number(counts.pending || 0);
-    const scheduled = Number(counts.retry_wait || 0);
-    const running = Number(counts.running || 0);
-    const successRate = rate(attempts.matched, attempts.total);
-    const retryRate = rate(attempts.retry, attempts.total);
-    const unavailable = Object.values(attempts).some((value) => value === null);
+    const pending = wholeCount(counts.pending);
+    const scheduled = wholeCount(counts.retry_wait);
+    const running = wholeCount(counts.running);
 
     const content = document.createDocumentFragment();
-    const heading = el("div", "overview-heading");
-    const intro = el("div");
-    intro.append(el("p", "eyebrow", t("มอนิเตอร์ / ภาพรวม")), el("h2", "overview-title", t("สรุปการทำงาน")),
-      el("p", "overview-description", t("ดูประสิทธิภาพ สถานะคิว และการทำงานของเวิร์กเกอร์ได้ในที่เดียว")));
-    const period = el("div", "period-label", t("24 ชั่วโมงล่าสุด"));
-    heading.append(intro, period);
-    content.append(heading);
-
-    const summary = el("div", "summary-grid");
-    summary.append(
-      summaryCard("success", t("อัตราความสำเร็จ"), successRate.value, successRate.detail, t("จับคู่ได้ ทั้งรายการที่มีและไม่มีเบอร์โทร"), "✓", "success", successRate.percent),
-      summaryCard("blocked", t("CAPTCHA / การบล็อก"), attempts.blocked === null ? "—" : formatCount(attempts.blocked),
-        attempts.blocked === null ? t("ไม่มีข้อมูลจำนวนครั้ง") : t("ครั้งที่ค้นหาแล้วถูกบล็อก"),
-        attempts.consent === null ? t("ไม่มีข้อมูลคำขอความยินยอม") : t("ต้องขอความยินยอม {n} ครั้ง", { n: formatCount(attempts.consent) }), "!", "danger"),
-      summaryCard("retry", t("อัตราการลองซ้ำ"), retryRate.value, retryRate.detail, t("กำหนดให้ลองใหม่หลังเกิดข้อผิดพลาดชั่วคราว"), "↻", "warning", retryRate.percent),
-      summaryCard("queue", t("รายการในคิว"), formatCount(pending + scheduled),
-        t("{pending} รอดำเนินการ · {scheduled} กำหนดไว้", { pending: formatCount(pending), scheduled: formatCount(scheduled) }),
-        t("{n} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต", { n: formatCount(running) }), "≡", "info"),
-      summaryCard("workers", t("สถานะเวิร์กเกอร์"), chosenWorkers.length ? `${formatCount(reporting)} / ${formatCount(chosenWorkers.length)}` : "—",
-        chosenWorkers.length ? t("ได้รับสัญญาณชีพล่าสุด") : t("ยังไม่มีเวิร์กเกอร์"),
-        chosenWorkers.length ? t("{a} ไม่มีสัญญาณชีพล่าสุด · {b} รายงานว่าหยุดทำงานล่าสุด", { a: formatCount(chosenWorkers.length - reporting), b: formatCount(paused) }) : t("กำลังรอข้อมูลเวิร์กเกอร์"), "◉", "accent"),
-    );
-    content.append(summary);
-    content.append(el("p", "summary-note", t("ประสิทธิภาพคำนวณจากการลองตรวจสอบที่เสร็จแล้วใน 24 ชั่วโมงล่าสุด ส่วนสถานะคิวและเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด")));
-
-    const chartHeading = el("div", "activity-section-heading");
-    chartHeading.append(el("p", "eyebrow", t("ภาพรวม", null, "At a glance")), el("h2", "activity-section-title", t("รายละเอียดกิจกรรม")));
-    const charts = el("div", "charts-grid");
-    charts.append(attemptChart(attempts), queueChart(pending, scheduled, running));
-    content.append(chartHeading, charts);
+    const dash = el("div", "dash");
+    const top = el("div", "dash-row lead");
+    top.append(keyMetricsCard(activity, range), trendCard(activity));
+    const middle = el("div", "dash-row halves");
+    middle.append(heatmapCard(activity), durationCard(activity));
+    const bottom = el("div", "dash-row thirds");
+    bottom.append(errorsCard(activity), queueCard(pending, scheduled, running, activity), coverageCard(data.outcome_counts));
+    dash.append(top, middle, bottom);
+    content.append(dash, el("p", "summary-note", t("ตัวชี้วัดและกราฟคำนวณจากการลองตรวจสอบที่เสร็จแล้วในช่วงวันที่ที่เลือก ตามเวลาท้องถิ่นของเบราว์เซอร์ ส่วนคิว ความครอบคลุม และเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด")));
 
     const workerHeading = el("div", "worker-section-heading");
     const workerIntro = el("div");
-    workerIntro.append(el("p", "eyebrow", t("กิจกรรมของเวิร์กเกอร์")), el("h2", "worker-section-title", t("เวิร์กเกอร์", null, "Workers")));
+    const workerSummary = el("p", "worker-summary");
+    workerSummary.dataset.metric = "workers";
+    workerSummary.append(
+      el("strong", "summary-value", chosenWorkers.length ? `${formatCount(reporting)} / ${formatCount(chosenWorkers.length)}` : "—"),
+      el("span", "", chosenWorkers.length ? t("ได้รับสัญญาณชีพล่าสุด") : t("ยังไม่มีเวิร์กเกอร์")),
+      el("span", "worker-summary-detail", chosenWorkers.length
+        ? t("{a} ไม่มีสัญญาณชีพล่าสุด · {b} รายงานว่าหยุดทำงานล่าสุด", { a: formatCount(chosenWorkers.length - reporting), b: formatCount(paused) })
+        : t("กำลังรอข้อมูลเวิร์กเกอร์")),
+    );
+    workerIntro.append(el("h2", "worker-section-title", t("เวิร์กเกอร์", null, "Workers")), workerSummary);
     workerHeading.append(workerIntro, el("p", "worker-section-note", t("สัญญาณชีพที่ได้รับภายใน 10 นาทีล่าสุด")));
     content.append(workerHeading);
 
@@ -510,6 +1015,8 @@
       section.append(header);
 
       const usage = state.daily_usage != null ? `${formatCount(state.daily_usage)} / ${state.daily_limit == null ? "—" : formatCount(state.daily_limit)}` : "—";
+      const usageShare = state.daily_usage != null && Number(state.daily_limit) > 0
+        ? Math.min(100, Math.max(0, Number(state.daily_usage) * 100 / Number(state.daily_limit))) : undefined;
       const day = state.bangkok_day ? t("วันที่ตามเวลาไทย {day}", { day: state.bangkok_day }) : t("ยังไม่มีรายงานการใช้งาน");
       const current = state.current_job ? `${state.current_job.name || t("สถานที่ไม่มีชื่อ")} · ${state.current_job.osm_id || "—"}` : t("ยังไม่มีรายงานการค้นหา");
       const exit = worker.last_exit ? `${STATUS_LABELS[worker.last_exit.outcome] || worker.last_exit.outcome || t("รายงานการสิ้นสุด")}${worker.last_exit.reason ? ` · ${worker.last_exit.reason}` : ""}` : t("ยังไม่มีรายงานการสิ้นสุดรอบทำงาน");
@@ -517,7 +1024,7 @@
       const queueLine = Object.entries(queue).map(([name, count]) => `${STATUS_LABELS[name] || name}: ${formatCount(count)}`).join(" · ") || t("ยังไม่มีรายงานจำนวนในคิว");
       const stats = el("div", "worker-stats");
       stats.append(
-        workerStat(t("การใช้งานรายวัน / ขีดจำกัด"), usage, day),
+        workerStat(t("การใช้งานรายวัน / ขีดจำกัด"), usage, day, usageShare),
         workerStat(t("การค้นหาที่รายงานล่าสุด"), current, t("รออัปโหลด: {n}", { n: state.pending_upload_count == null ? "—" : formatCount(state.pending_upload_count) })),
         workerStat(t("สัญญาณชีพล่าสุด"), formatDate(worker.last_heartbeat_at), recent ? t("ได้รับภายใน 10 นาที") : t("ไม่ได้รับสัญญาณชีพล่าสุด")),
         workerStat(t("อัปโหลดล่าสุด"), formatDate(worker.last_upload_at), t("พบล่าสุด {date}", { date: formatDate(worker.last_seen_at) })),
@@ -535,8 +1042,17 @@
       section.append(detail);
       content.append(section);
     });
+
+    // A refresh replaces the cards; keep the reader's place in them.
+    const focusedId = container.contains(document.activeElement) ? document.activeElement.id : "";
+    const openIds = Array.from(container.querySelectorAll("details[open][id]"), (details) => details.id);
     container.replaceChildren(content);
-    return unavailable ? t("ข้อมูลประสิทธิภาพบางรายการไม่พร้อมใช้งาน ระบบจะลองใหม่อัตโนมัติ") : "";
+    openIds.forEach((id) => {
+      const details = document.getElementById(id);
+      if (details) details.open = true;
+    });
+    if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+    return activity ? "" : t("ไม่มีข้อมูลกิจกรรม ระบบจะลองใหม่อัตโนมัติ");
   }
 
   function selectedReview() {
@@ -1215,6 +1731,7 @@
       button.setAttribute("aria-pressed", String(selected));
     });
     document.querySelectorAll(".view").forEach((section) => { section.hidden = section.id !== `${view}-view`; });
+    syncRangeControls();
     refreshCurrent();
   }
 
@@ -1262,6 +1779,10 @@
   langToggle.title = langLabel;
   langToggle.setAttribute("aria-label", langLabel);
   langToggle.addEventListener("click", () => I18N.setLang(nextLang));
+  document.getElementById("range-preset").addEventListener("change", (event) => setRange(Number(event.target.value), 0));
+  document.getElementById("range-prev").addEventListener("click", () => setRange(rangeDays, rangeOffset + 1));
+  document.getElementById("range-next").addEventListener("click", () => setRange(rangeDays, rangeOffset - 1));
+  syncRangeControls();
   document.getElementById("active-worker").addEventListener("change", (event) => {
     setActiveWorker(event.target.value);
     refreshCurrent();
