@@ -25,6 +25,7 @@
     "เวิร์กเกอร์": "Worker",
     "รีเฟรชตอนนี้": "Refresh now",
     "เปลี่ยนเป็นธีมมืด": "Switch to dark theme", "เปลี่ยนเป็นธีมสว่าง": "Switch to light theme",
+    "เริ่มสลับธีมทุก 250 มิลลิวินาที": "Start theme loop every 250 ms", "หยุดสลับธีม": "Stop theme loop",
     "ส่วนต่าง ๆ ของแดชบอร์ด": "Dashboard sections",
     "ภาพรวม": "Overview", "สถานที่": "Places", "บันทึกเหตุการณ์": "Logs",
     "ตัวกรองแดชบอร์ด": "Dashboard filters", "ช่วงวันที่": "Date range",

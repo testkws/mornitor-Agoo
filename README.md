@@ -44,7 +44,9 @@ for actions, `#EEEFFF` for chips). Charts use a single indigo ramp: five
 ordered steps for the inspection-time donut and lighter steps for the
 heatmap. Place coverage uses four distinct hues plus grey. It follows the
 system light/dark preference and has a manual theme toggle that remembers
-your choice. Good, warning and error colors remain distinct for operational
+your choice. The adjacent loop button switches dark/light themes every 250 ms;
+press it again to stop on the current theme. Looping does not overwrite your
+saved theme preference. Good, warning and error colors remain distinct for operational
 status, and every change indicator also carries an arrow and a sign.
 
 The filter bar under the tabs holds the date range (Overview only) and the

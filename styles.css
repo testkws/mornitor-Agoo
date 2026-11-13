@@ -201,6 +201,7 @@ button.secondary:hover { background: var(--surface-2); }
   border-color: var(--control-line);
 }
 .icon-btn:hover { background: var(--accent-soft); }
+.icon-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
 .icon-btn svg[hidden] { display: none; }
 .icon-btn.lang-btn { font-size: .8rem; font-weight: 650; }
 .icon-btn.spin svg { animation: spin .7s linear; }

@@ -1766,11 +1766,28 @@
   }
   updateThemeToggle();
   systemTheme.addEventListener("change", updateThemeToggle);
-  themeToggle.addEventListener("click", () => {
+  function toggleTheme(persist = true) {
     const root = document.documentElement;
     root.dataset.theme = isDarkTheme() ? "light" : "dark";
-    try { localStorage.setItem("theme", root.dataset.theme); } catch { /* storage unavailable */ }
+    if (persist) {
+      try { localStorage.setItem("theme", root.dataset.theme); } catch { /* storage unavailable */ }
+    }
     updateThemeToggle();
+  }
+  themeToggle.addEventListener("click", () => toggleTheme());
+  const themeLoopToggle = document.getElementById("theme-loop-toggle");
+  let themeLoopTimer = null;
+  themeLoopToggle.addEventListener("click", () => {
+    const running = themeLoopTimer === null;
+    if (running) themeLoopTimer = window.setInterval(() => toggleTheme(false), 250);
+    else {
+      window.clearInterval(themeLoopTimer);
+      themeLoopTimer = null;
+    }
+    themeLoopToggle.setAttribute("aria-pressed", String(running));
+    const label = running ? t("หยุดสลับธีม") : t("เริ่มสลับธีมทุก 250 มิลลิวินาที");
+    themeLoopToggle.setAttribute("aria-label", label);
+    themeLoopToggle.title = label;
   });
   const langToggle = document.getElementById("lang-toggle");
   const nextLang = I18N.lang === "en" ? "th" : "en";
