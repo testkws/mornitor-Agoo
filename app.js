@@ -1779,7 +1779,7 @@
   let themeLoopTimer = null;
   themeLoopToggle.addEventListener("click", () => {
     const running = themeLoopTimer === null;
-    if (running) themeLoopTimer = window.setInterval(() => toggleTheme(false), 250);
+    if (running) themeLoopTimer = window.setInterval(() => toggleTheme(false), 100);
     else {
       window.clearInterval(themeLoopTimer);
       themeLoopTimer = null;
