@@ -42,7 +42,7 @@ from the same catalog). Add new UI text to that catalog as well.
 The UI uses white cards with thin borders and one indigo accent (`#4F46E5`
 for actions, `#EEEFFF` for chips). Charts use a single indigo ramp: five
 ordered steps for the inspection-time donut and lighter steps for the
-heatmap. Place coverage uses four distinct hues plus grey. It follows the
+heatmap. Place coverage uses three distinct hues plus grey. It follows the
 system light/dark preference and has a manual theme toggle that remembers
 your choice. The adjacent loop button switches dark/light themes every 250 ms;
 press it again to stop on the current theme. Looping does not overwrite your
@@ -93,7 +93,7 @@ order. There is one row per `(worker_id, osm_id)`.
 | `osm_id` | `text` | OSM identity, e.g. `node/123`; part of the key. |
 | `source_record` | `jsonb` | Source place fields, typically name, coordinates, province, district and aliases. |
 | `queue_status` | `text` | Most recently reported queue state. |
-| `outcome` | `text`, nullable | Most recently reported result, e.g. `found`, `ambiguous` or `not_found`. |
+| `outcome` | `text`, nullable | Final local outcomes are `found`, `found_no_phone` and `not_found`. Older snapshots may contain `ambiguous`. |
 | `google_proposal` | `jsonb`, nullable | Latest proposal or pending suggestion; fields vary and are not necessarily approved. |
 | `candidates` | `jsonb` | Array of raw Google candidates; candidate fields vary. |
 | `matching_method` | `text`, nullable | Reported matching method. |
@@ -191,19 +191,21 @@ give the direction; the colour says whether that direction is good.
 - **Errors and blocks.** Lookup errors (`lookup_error` outcomes); CAPTCHA /
   blocks (`BLOCKED` errors) with consent-required errors shown separately; the
   retry rate (attempts marked `retry_wait` with outcome `lookup_error`, divided
-  by all completed attempts, so scheduled rechecks after a non-error result are
-  excluded); and the five most frequent error codes.
+  by all completed attempts); and the five most frequent diagnostic codes.
+  A `DOM_CHANGED` attempt contributes to those diagnostics and closes as
+  `not_found`.
 
 Three cards ignore the date range and always show the most recently uploaded
 snapshots:
 
-- **Queue snapshot.** The total includes both `pending` and `retry_wait`,
-  including rechecks that may not be due yet. For the current period it adds a
-  rough estimate of how long pending places would take at the period's pace.
-  Attempts include rechecks, so treat it as a lower bound.
-- **Place coverage.** The latest outcome of every place: found, found without a
-  phone, ambiguous, not found, and no result yet (never checked, or the last
-  check ended in an error).
+- **Queue snapshot.** The total combines pending jobs and jobs waiting to retry.
+  Running jobs have their own count. The upgraded worker cancels scheduled
+  rechecks of completed jobs and reports the updated queue in its snapshots.
+  The pace estimate counts attempts, including retryable errors.
+- **Place coverage.** Shows found, found without a phone, not found, and places
+  awaiting a final result. Older ambiguous snapshots stay in the last group
+  until the worker uploads their final outcomes. Place details and raw CSV
+  exports retain the original snapshot values.
 - **Workers.** A recent worker heartbeat means one was received within ten
   minutes, and a pause reason is the last reported value. With five-minute
   refreshes, a stopped worker can take about 10–15 minutes after its last

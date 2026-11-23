@@ -142,8 +142,8 @@ def seed_summary_data(page):
       });
       state.attempts = [
         row(state.workerA, -1000, 'found', 'checked'),
-        row(state.workerA, -2000, 'found_no_phone', 'retry_wait'),
-        row(state.workerA, -3000, 'not_found', 'retry_wait'),
+        row(state.workerA, -2000, 'found_no_phone', 'exhausted'),
+        row(state.workerA, -3000, 'not_found', 'exhausted', 'DOM_CHANGED'),
         row(state.workerA, -4000, 'ambiguous', 'retry_wait'),
         row(state.workerA, -5000, 'lookup_error', 'retry_wait', 'TIMEOUT'),
         row(state.workerA, -6000, 'lookup_error', 'blocked', 'BLOCKED'),
@@ -175,10 +175,10 @@ def test_summary_metrics_use_attempts_in_range_and_selected_worker(page):
     expect(metric(page, "retry").locator(".summary-value")).to_have_text("10.0%")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("1")
     expect(metric(page, "blocked")).to_contain_text("1 consent required")
-    expect(card(page, "errors").locator(".code-list li")).to_have_text(["BLOCKED1", "CONSENT_REQUIRED1", "TIMEOUT1"])
+    expect(card(page, "errors").locator(".code-list li")).to_have_text(["BLOCKED1", "CONSENT_REQUIRED1", "DOM_CHANGED1", "TIMEOUT1"])
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("30")
-    expect(metric(page, "queue")).to_contain_text("20 pending · 10 scheduled")
-    expect(metric(page, "queue")).to_contain_text("2 running · includes future rechecks")
+    expect(metric(page, "queue")).to_contain_text("20 pending · 10 waiting to retry")
+    expect(metric(page, "queue")).to_contain_text("2 running")
     expect(metric(page, "workers").locator(".summary-value")).to_have_text("1 / 2")
     expect(page.get_by_text("Last reported paused: BLOCKED")).to_be_visible()
     expect(page.get_by_text("Worker not reporting")).to_be_visible()
@@ -208,7 +208,7 @@ def test_summary_metrics_use_attempts_in_range_and_selected_worker(page):
     expect(metric(page, "retry").locator(".summary-value")).to_have_text("0.0%")
     expect(metric(page, "blocked").locator(".summary-value")).to_have_text("0")
     expect(metric(page, "queue").locator(".summary-value")).to_have_text("0")
-    expect(card(page, "errors")).to_contain_text("No error codes in this period.")
+    expect(card(page, "errors")).to_contain_text("No diagnostic codes in this period.")
     for row in queue_chart.locator(".chart-bar-item").all():
         expect(row.locator("strong")).to_have_text("0")
         assert row.locator(".chart-bar-fill").evaluate("node => node.style.width") == "0%"
@@ -392,20 +392,25 @@ def test_place_coverage_uses_latest_outcomes(page):
       places.slice(0, 20).forEach(place => { place.outcome = 'found_no_phone'; });
       places.slice(20, 30).forEach(place => { place.outcome = 'ambiguous'; });
       places.slice(30, 34).forEach(place => { place.outcome = 'lookup_error'; });
-      places.slice(34, 51).forEach(place => { place.outcome = null; });
+      places.slice(34, 39).forEach(place => { place.outcome = 'not_found'; place.queue_status = 'exhausted'; });
+      places.slice(39, 51).forEach(place => { place.outcome = null; });
     }""")
     page.locator("#refresh").click()
     coverage = page.get_by_role("region", name="Place coverage", exact=True)
-    expect(coverage.locator(".summary-value")).to_have_text("79.4%")
-    expect(coverage).to_contain_text("81 of 102 places have a result")
+    expect(coverage.locator(".summary-value")).to_have_text("74.5%")
+    expect(coverage).to_contain_text("76 of 102 places have a final result")
     assert coverage.locator(".stack-legend li").all_text_contents() == [
-        "Found5150.0%", "Found (no phone)2019.6%", "Ambiguous109.8%", "Not found00.0%", "No result yet2120.6%"]
-    assert coverage.locator(".stack-part").all_text_contents() == ["50%", "20%", "10%", "21%"]
-    expect(coverage.get_by_role("img")).to_have_attribute("aria-label", re.compile(r"^Found 51 \(50\.0%\), .*No result yet 21 \(20\.6%\)$"))
+        "Found5150.0%", "Found (no phone)2019.6%", "Not found54.9%", "No final result2625.5%"]
+    assert coverage.locator(".stack-part").all_text_contents() == ["50%", "20%", "", "25%"]
+    expect(coverage.get_by_role("img")).to_have_attribute("aria-label", re.compile(r"^Found 51 \(50\.0%\), .*No final result 26 \(25\.5%\)$"))
 
     page.locator("#active-worker").select_option(page.evaluate("window.monitoringTest.state.workerB"))
     expect(coverage.locator(".summary-value")).to_have_text("100.0%")
-    expect(coverage).to_contain_text("1 of 1 places have a result")
+    expect(coverage).to_contain_text("1 of 1 places have a final result")
+
+    show(page, "places")
+    expect(page.locator("#place-outcome option")).to_have_text(["All outcomes", "Found", "Found (no phone)", "Not found"])
+    expect(page.locator('#place-status option[value="exhausted"]')).to_have_text("Closed")
 
 
 def test_empty_summary_and_no_workers(page):
@@ -1927,6 +1932,6 @@ def test_overview_is_available_in_thai_on_a_small_screen(browser):
     expect(page.locator("#range-preset option:checked")).to_have_text("7 วัน")
     expect(page.get_by_role("button", name="ช่วงก่อนหน้า")).to_be_enabled()
     expect(page.get_by_role("region", name="ช่วงเวลาที่ทำงานมากที่สุด", exact=True).locator("thead th").first).to_have_text("จันทร์")
-    expect(page.get_by_role("region", name="ความครอบคลุมของสถานที่", exact=True)).to_contain_text("102 จาก 102 สถานที่มีผลลัพธ์แล้ว")
+    expect(page.get_by_role("region", name="ความครอบคลุมของสถานที่", exact=True)).to_contain_text("102 จาก 102 สถานที่มีผลลัพธ์สุดท้ายแล้ว")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.close()

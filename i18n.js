@@ -8,7 +8,7 @@
     "พบสถานที่": "Found", "พบสถานที่ (ไม่มีเบอร์โทร)": "Found (no phone)", "ไม่พบสถานที่": "Not found",
     "ผลลัพธ์ไม่ชัดเจน": "Ambiguous", "ข้อผิดพลาดในการค้นหา": "Lookup error",
     "รอดำเนินการ": "Pending", "กำลังทำงาน": "Running", "รอลองอีกครั้ง": "Waiting to retry", "ตรวจแล้ว": "Checked",
-    "ครบจำนวนครั้งแล้ว": "Attempts exhausted", "ข้ามแล้ว": "Skipped", "ถูกบล็อก": "Blocked", "ล้มเหลว": "Failed",
+    "ปิดงานแล้ว": "Closed", "ข้ามแล้ว": "Skipped", "ถูกบล็อก": "Blocked", "ล้มเหลว": "Failed",
     "หยุดชั่วคราว": "Paused", "ไม่มีงานที่ถึงกำหนด": "No work due", "ถูกขัดจังหวะ": "Interrupted",
     "ข้อมูลวินิจฉัย": "Debug", "ข้อมูล": "Info", "คำเตือน": "Warning", "ข้อผิดพลาด": "Error",
     "ต้องตรวจทาน": "Needs review",
@@ -108,13 +108,11 @@
     "ต่ำกว่า 10 วินาที": "Under 10 s", "10–20 วินาที": "10–20 s", "20–30 วินาที": "20–30 s",
     "30–60 วินาที": "30–60 s", "1 นาทีขึ้นไป": "1 min or more",
     "ข้อผิดพลาดและการบล็อก": "Errors and blocks",
-    "รหัสข้อผิดพลาดที่พบบ่อย": "Most frequent error codes", "ไม่มีรหัสข้อผิดพลาดในช่วงนี้": "No error codes in this period.",
+    "รหัสวินิจฉัยที่พบบ่อย": "Most frequent diagnostic codes", "ไม่มีรหัสวินิจฉัยในช่วงนี้": "No diagnostic codes in this period.",
     "ความครอบคลุมของสถานที่": "Place coverage",
     "ผลลัพธ์ล่าสุดของแต่ละสถานที่ ไม่ขึ้นกับช่วงวันที่": "Latest result for each place, whatever the date range",
-    "ยังไม่มีผลลัพธ์": "No result yet", "{a} จาก {b} สถานที่มีผลลัพธ์แล้ว": "{a} of {b} places have a result",
+    "ยังไม่มีผลลัพธ์สุดท้าย": "No final result", "{a} จาก {b} สถานที่มีผลลัพธ์สุดท้ายแล้ว": "{a} of {b} places have a final result",
     "ตัวชี้วัดและกราฟคำนวณจากการลองตรวจสอบที่เสร็จแล้วในช่วงวันที่ที่เลือก ตามเวลาท้องถิ่นของเบราว์เซอร์ ส่วนคิว ความครอบคลุม และเวิร์กเกอร์อ้างอิงภาพสถานะที่อัปโหลดล่าสุด": "Metrics and charts use attempts completed in the selected date range, in the browser's local time. Queue, coverage and worker status reflect the latest uploaded snapshots.",
-
-    "กำหนดไว้": "Scheduled",
 
     "ไม่มีข้อมูลเวิร์กเกอร์": "Worker data is unavailable.",
 
@@ -125,8 +123,8 @@
     "ต้องขอความยินยอม {n} ครั้ง": "{n} consent required",
     "อัตราการลองซ้ำ": "Retry rate",
 
-    "{pending} รอดำเนินการ · {scheduled} กำหนดไว้": "{pending} pending · {scheduled} scheduled",
-    "{n} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต": "{n} running · includes future rechecks",
+    "{pending} รอดำเนินการ · {scheduled} รอลองอีกครั้ง": "{pending} pending · {scheduled} waiting to retry",
+    "{n} กำลังทำงาน": "{n} running",
 
     "ได้รับสัญญาณชีพล่าสุด": "Recent heartbeats received",
     "ยังไม่มีเวิร์กเกอร์": "No workers provisioned",

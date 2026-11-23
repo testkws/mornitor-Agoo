@@ -44,7 +44,6 @@
   --heat-5: #6369e2;
   --cat-1: #6250d6;
   --cat-2: #1baf7a;
-  --cat-3: #eda100;
   --cat-4: #e87ba4;
   --cat-none: #d9dae3;
   --radius: 10px;
@@ -97,7 +96,6 @@
   --heat-5: #7882ef;
   --cat-1: #9085e9;
   --cat-2: #199e70;
-  --cat-3: #c98500;
   --cat-4: #d55181;
   --cat-none: #4a4c63;
   --shadow: 0 1px 2px #0004;
@@ -147,7 +145,6 @@
     --heat-5: #7882ef;
     --cat-1: #9085e9;
     --cat-2: #199e70;
-    --cat-3: #c98500;
     --cat-4: #d55181;
     --cat-none: #4a4c63;
     --shadow: 0 1px 2px #0004;
@@ -435,10 +432,8 @@ html[lang="th"] th { letter-spacing: normal; }
 .stack-legend { display: grid; gap: 8px; }
 .outcome-found { background: var(--cat-1); }
 .outcome-found_no_phone { background: var(--cat-2); }
-.outcome-ambiguous { background: var(--cat-3); }
 .outcome-not_found { background: var(--cat-4); }
 .outcome-none { background: var(--cat-none); }
-.stack-part.outcome-ambiguous { color: #0b0b0b; }
 .stack-part.outcome-none { color: var(--ink); }
 
 /* Places chart panel */

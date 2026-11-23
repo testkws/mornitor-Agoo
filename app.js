@@ -18,7 +18,7 @@
     found: "พบสถานที่", found_no_phone: "พบสถานที่ (ไม่มีเบอร์โทร)", not_found: "ไม่พบสถานที่",
     ambiguous: "ผลลัพธ์ไม่ชัดเจน", lookup_error: "ข้อผิดพลาดในการค้นหา",
     pending: "รอดำเนินการ", running: "กำลังทำงาน", retry_wait: "รอลองอีกครั้ง", checked: "ตรวจแล้ว",
-    exhausted: "ครบจำนวนครั้งแล้ว", skipped: "ข้ามแล้ว", blocked: "ถูกบล็อก", failed: "ล้มเหลว",
+    exhausted: "ปิดงานแล้ว", skipped: "ข้ามแล้ว", blocked: "ถูกบล็อก", failed: "ล้มเหลว",
     paused: "หยุดชั่วคราว", no_due_work: "ไม่มีงานที่ถึงกำหนด", interrupted: "ถูกขัดจังหวะ",
     debug: "ข้อมูลวินิจฉัย", info: "ข้อมูล", warning: "คำเตือน", error: "ข้อผิดพลาด",
     "needs review": "ต้องตรวจทาน",
@@ -137,7 +137,7 @@
   const PILL_TONES = {
     found: "ok", checked: "ok", info: "info", running: "info", pending: "neutral", debug: "neutral", skipped: "neutral",
     found_no_phone: "warn", ambiguous: "warn", retry_wait: "warn", warning: "warn",
-    not_found: "bad", exhausted: "bad", blocked: "bad", failed: "bad", error: "bad",
+    blocked: "bad", failed: "bad", error: "bad",
   };
 
   function pill(value, label = value) {
@@ -820,9 +820,9 @@
         deltaNode(current.blk - previous.blk, formatCount, false)),
       metricRow("retry", t("อัตราการลองซ้ำ"), retry.value, retry.detail),
     );
-    section.append(rows, el("h4", "card-subtitle", t("รหัสข้อผิดพลาดที่พบบ่อย")));
+    section.append(rows, el("h4", "card-subtitle", t("รหัสวินิจฉัยที่พบบ่อย")));
     if (!activity.errors.length) {
-      section.append(el("p", "card-note", t("ไม่มีรหัสข้อผิดพลาดในช่วงนี้")));
+      section.append(el("p", "card-note", t("ไม่มีรหัสวินิจฉัยในช่วงนี้")));
       return section;
     }
     const list = el("ul", "code-list");
@@ -840,10 +840,10 @@
     section.dataset.metric = "queue";
     const headline = el("div", "card-figure");
     headline.append(el("p", "summary-value", formatCount(pending + scheduled)),
-      el("p", "metric-note", t("{pending} รอดำเนินการ · {scheduled} กำหนดไว้", { pending: formatCount(pending), scheduled: formatCount(scheduled) })));
+      el("p", "metric-note", t("{pending} รอดำเนินการ · {scheduled} รอลองอีกครั้ง", { pending: formatCount(pending), scheduled: formatCount(scheduled) })));
     const rows = [
       { key: "pending", label: t("รอดำเนินการ"), count: pending },
-      { key: "scheduled", label: t("กำหนดไว้"), count: scheduled },
+      { key: "scheduled", label: STATUS_LABELS.retry_wait, count: scheduled },
       { key: "running", label: t("กำลังทำงาน"), count: running },
     ];
     const maximum = Math.max(...rows.map((row) => row.count));
@@ -861,8 +861,8 @@
       item.append(heading, track);
       list.append(item);
     });
-    section.append(headline, list, el("p", "card-note", t("{n} กำลังทำงาน · รวมการตรวจซ้ำในอนาคต", { n: formatCount(running) })));
-    // A rough pace: attempts include rechecks, so pending places can take longer.
+    section.append(headline, list, el("p", "card-note", t("{n} กำลังทำงาน", { n: formatCount(running) })));
+    // Attempts include retryable errors, so this estimate can overstate the rate of finished jobs.
     const days = activity && !rangeOffset ? (activity.range.end - activity.range.start) / DAY : 0;
     const pace = days ? activity.current.n / Math.max(days, 1 / 24) : 0;
     if (pending && pace >= 1) {
@@ -884,15 +884,15 @@
       section.append(el("p", "chart-empty", t("ยังไม่มีรายงานสถานที่")));
       return section;
     }
-    const named = ["found", "found_no_phone", "ambiguous", "not_found"];
+    const named = ["found", "found_no_phone", "not_found"];
     const parts = named.map((key) => ({ key, label: STATUS_LABELS[key], count: counts[key] || 0 }));
     const resolved = parts.reduce((sum, part) => sum + part.count, 0);
-    parts.push({ key: "none", label: t("ยังไม่มีผลลัพธ์"), count: total - resolved });
+    parts.push({ key: "none", label: t("ยังไม่มีผลลัพธ์สุดท้าย"), count: total - resolved });
     const share = (count) => count * 100 / total;
     const headline = el("div", "card-figure");
     headline.dataset.metric = "coverage";
     headline.append(el("p", "summary-value", `${share(resolved).toFixed(1)}%`),
-      el("p", "metric-note", t("{a} จาก {b} สถานที่มีผลลัพธ์แล้ว", { a: formatCount(resolved), b: formatCount(total) })));
+      el("p", "metric-note", t("{a} จาก {b} สถานที่มีผลลัพธ์สุดท้ายแล้ว", { a: formatCount(resolved), b: formatCount(total) })));
     const bar = el("div", "stack-bar");
     bar.setAttribute("role", "img");
     bar.setAttribute("aria-label", parts.map((part) => `${part.label} ${formatCount(part.count)} (${share(part.count).toFixed(1)}%)`).join(", "));
